@@ -2363,3 +2363,191 @@ fn zoom_is_for_image_books_and_says_so() {
     assert!(px < 0.0 || py < 0.0, "the pan moved off origin");
     unsafe { cb_session_close(session) };
 }
+
+/// Contents, search, and the locator: the three ways a reader goes
+/// somewhere on purpose, spelled the way a host writes them.
+#[test]
+fn a_host_can_reach_a_place_it_names() {
+    let session = open("navigation", "epub/long.epub");
+    assert_eq!(
+        unsafe { cb_session_set_metrics(session, metrics()) },
+        cb_status::CB_OK
+    );
+
+    // ---- Contents ----
+    let mut count = 0usize;
+    assert_eq!(
+        unsafe { cb_session_toc_count(session, &mut count) },
+        cb_status::CB_OK,
+        "{}",
+        last_error()
+    );
+    assert!(count > 1, "long.epub has contents");
+    let mut entry = cb_toc_entry {
+        depth: 0,
+        spine: 0,
+        has_spine: false,
+        has_fragment: false,
+    };
+    assert_eq!(
+        unsafe { cb_session_toc_entry(session, 0, &mut entry) },
+        cb_status::CB_OK
+    );
+    assert_eq!(entry.depth, 0, "the first entry is top level");
+    let label = read_string(|buf, cap, needed| unsafe {
+        cb_session_toc_label(session, 0, buf, cap, needed)
+    })
+    .expect("an entry has a label");
+    assert!(!label.trim().is_empty());
+    // Past the end is an argument error, not a crash.
+    assert_eq!(
+        unsafe { cb_session_toc_entry(session, count, &mut entry) },
+        cb_status::CB_ERR_INVALID_ARGUMENT
+    );
+
+    // Jump to the last entry and land in its unit.
+    let mut last = cb_toc_entry {
+        depth: 0,
+        spine: 0,
+        has_spine: false,
+        has_fragment: false,
+    };
+    assert_eq!(
+        unsafe { cb_session_toc_entry(session, count - 1, &mut last) },
+        cb_status::CB_OK
+    );
+    let mut moved = false;
+    assert_eq!(
+        unsafe { cb_session_goto_toc(session, count - 1, &mut moved) },
+        cb_status::CB_OK
+    );
+    if last.has_spine {
+        assert!(moved, "an entry that points somewhere moves the reader");
+        let mut at = cb_position { spine: 0, page: 0 };
+        unsafe { cb_session_position(session, &mut at) };
+        // `cb_position` carries a `uint32_t` spine while the newer
+        // structs carry `size_t`; the cast is that split, not a
+        // conversion the value needs.
+        assert_eq!(at.spine as usize, last.spine, "landed in the entry's unit");
+    }
+
+    // ---- The locator, and going back to one ----
+    let (mut spine, mut offset) = (0usize, 0u32);
+    assert_eq!(
+        unsafe { cb_session_locator(session, &mut spine, &mut offset) },
+        cb_status::CB_OK
+    );
+    let saved = (spine, offset);
+
+    // Wander off, then return to the saved place exactly.
+    assert_eq!(
+        unsafe { cb_session_goto(session, 0, 0, &mut moved) },
+        cb_status::CB_OK
+    );
+    assert!(moved);
+    assert_eq!(
+        unsafe { cb_session_goto(session, saved.0, saved.1, &mut moved) },
+        cb_status::CB_OK
+    );
+    let (mut back_spine, mut back_offset) = (0usize, 0u32);
+    unsafe { cb_session_locator(session, &mut back_spine, &mut back_offset) };
+    assert_eq!(back_spine, saved.0, "a locator names the unit it named");
+    assert!(
+        back_offset <= saved.1,
+        "and lands at or before its offset, never past it"
+    );
+
+    // A jump pushed a return position, so Back has somewhere to go.
+    let mut can = false;
+    assert_eq!(
+        unsafe { cb_session_can_go_back(session, &mut can) },
+        cb_status::CB_OK
+    );
+    assert!(can, "jumping is what fills the back stack");
+
+    // A spine index the book does not have is a refusal, not a crash.
+    assert_eq!(
+        unsafe { cb_session_goto(session, 9999, 0, &mut moved) },
+        cb_status::CB_OK
+    );
+    assert!(!moved);
+
+    // ---- Search ----
+    let query = cstr("the");
+    let mut hits = 0usize;
+    assert_eq!(
+        unsafe { cb_session_search(session, query.as_ptr(), 10, &mut hits) },
+        cb_status::CB_OK,
+        "{}",
+        last_error()
+    );
+    assert!(hits > 0 && hits <= 10, "the limit is honored: {hits}");
+
+    let mut hit = cb_search_hit {
+        spine: 0,
+        start: 0,
+        end: 0,
+        match_start: 0,
+        match_end: 0,
+    };
+    assert_eq!(
+        unsafe { cb_session_search_hit(session, 0, &mut hit) },
+        cb_status::CB_OK
+    );
+    assert!(hit.end > hit.start, "a match is a non-empty range");
+    let context = read_string(|buf, cap, needed| unsafe {
+        cb_session_search_context(session, 0, buf, cap, needed)
+    })
+    .expect("a hit carries context");
+    // The match range indexes the context, so a host can embolden it.
+    let matched: String = context
+        .chars()
+        .skip(hit.match_start as usize)
+        .take((hit.match_end - hit.match_start) as usize)
+        .collect();
+    assert_eq!(
+        matched.to_lowercase(),
+        "the",
+        "the match range names the match inside {context:?}"
+    );
+
+    // Going to a hit and painting it is the flow a search box runs.
+    assert_eq!(
+        unsafe { cb_session_goto(session, hit.spine, hit.start, &mut moved) },
+        cb_status::CB_OK
+    );
+    assert_eq!(
+        unsafe { cb_session_select_range(session, hit.start, hit.end) },
+        cb_status::CB_OK
+    );
+    let (mut sel_start, mut sel_end) = (0u32, 0u32);
+    assert_eq!(
+        unsafe { cb_session_selected_range(session, &mut sel_start, &mut sel_end) },
+        cb_status::CB_OK,
+        "the hit is on the page and selected"
+    );
+
+    // Per-unit search is the worker-drivable half.
+    assert_eq!(
+        unsafe { cb_session_search_unit(session, 0, query.as_ptr(), &mut hits) },
+        cb_status::CB_OK
+    );
+    let mut first = cb_search_hit {
+        spine: 99,
+        start: 0,
+        end: 0,
+        match_start: 0,
+        match_end: 0,
+    };
+    if hits > 0 {
+        unsafe { cb_session_search_hit(session, 0, &mut first) };
+        assert_eq!(first.spine, 0, "a unit search stays in its unit");
+    }
+    // A unit the book does not have is refused by name.
+    assert_eq!(
+        unsafe { cb_session_search_unit(session, 9999, query.as_ptr(), &mut hits) },
+        cb_status::CB_ERR_INVALID_ARGUMENT
+    );
+
+    unsafe { cb_session_close(session) };
+}

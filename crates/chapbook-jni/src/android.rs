@@ -40,6 +40,9 @@ struct Shell {
     /// expensive shape and an object per event is the verbose one.
     events: std::collections::VecDeque<SessionEvent>,
     event_message: Option<String>,
+    /// What the last search found, held so the per-index readers have
+    /// something to read.
+    hits: Vec<chapbook_reader::SearchHit>,
 }
 
 /// A session, as a `jlong` Java holds onto. Null is the failure value, so
@@ -54,6 +57,7 @@ fn into_handle(session: Session) -> jlong {
         keys: KeyMap::default(),
         events: std::collections::VecDeque::new(),
         event_message: None,
+        hits: Vec::new(),
     };
     Box::into_raw(Box::new(shell)) as jlong
 }
@@ -2614,4 +2618,271 @@ pub extern "system" fn Java_com_ophymx_chapbook_Native_pagePan(
 ) -> jfloatArray {
     let (x, y) = unsafe { session(handle) }.map_or((0.0, 0.0), |s| s.page_pan());
     float_array_out(&env, &[x, y])
+}
+
+// ---- Contents, search and the locator ----
+//
+// The three ways a reader goes somewhere on purpose. Contents cross
+// flattened, in reading order with a depth, because every consumer of a
+// TOC is a list with indentation and a tree across JNI is a shape
+// Kotlin would only have to rebuild. Search results are held between
+// the call that runs one and the calls that read it. A locator is two
+// numbers, and it is the durable position — the one the library stores
+// and marks anchor to — unlike `position`, which is the view.
+
+/// The contents, flattened: one row per entry, `[depth, spine,
+/// hasSpine, hasFragment]` — four longs each, laid end to end. Labels
+/// ride [`tocLabel`].
+///
+/// [`tocLabel`]: Java_com_ophymx_chapbook_Native_tocLabel
+#[no_mangle]
+pub extern "system" fn Java_com_ophymx_chapbook_Native_toc(
+    env: JNIEnv,
+    _class: JClass,
+    handle: jlong,
+) -> jlongArray {
+    let rows: Vec<jlong> = unsafe { session(handle) }
+        .map(|s| {
+            fn walk(
+                entries: &[chapbook_reader::chapbook_core::TocEntry],
+                depth: jlong,
+                out: &mut Vec<jlong>,
+            ) {
+                for entry in entries {
+                    out.push(depth);
+                    out.push(entry.spine_index.unwrap_or(0) as jlong);
+                    out.push(entry.spine_index.is_some() as jlong);
+                    out.push(entry.fragment.is_some() as jlong);
+                    walk(&entry.children, depth + 1, out);
+                }
+            }
+            let mut out = Vec::new();
+            walk(s.toc(), 0, &mut out);
+            out
+        })
+        .unwrap_or_default();
+    long_array_out(&env, &rows)
+}
+
+/// One entry's label, by flattened index, or null past the end.
+#[no_mangle]
+pub extern "system" fn Java_com_ophymx_chapbook_Native_tocLabel(
+    env: JNIEnv,
+    _class: JClass,
+    handle: jlong,
+    index: jint,
+) -> jstring {
+    let label = unsafe { session(handle) }.and_then(|s| {
+        let mut labels = Vec::new();
+        fn walk(entries: &[chapbook_reader::chapbook_core::TocEntry], out: &mut Vec<String>) {
+            for entry in entries {
+                out.push(entry.label.clone());
+                walk(&entry.children, out);
+            }
+        }
+        walk(s.toc(), &mut labels);
+        labels.get(index as usize).cloned()
+    });
+    match label {
+        Some(label) => string_out(&env, &label),
+        None => JObject::null().into_raw(),
+    }
+}
+
+/// Jump to a contents entry by flattened index. False for an entry that
+/// links nowhere — a section heading — which is not an error.
+#[no_mangle]
+pub extern "system" fn Java_com_ophymx_chapbook_Native_gotoToc(
+    _env: JNIEnv,
+    _class: JClass,
+    handle: jlong,
+    index: jint,
+) -> jboolean {
+    let Some(s) = (unsafe { session(handle) }) else {
+        return 0;
+    };
+    // Flatten to owned entries: `goto_toc` takes one, and the borrow of
+    // the tree cannot outlive the call that mutates the session.
+    fn walk(
+        entries: &[chapbook_reader::chapbook_core::TocEntry],
+        out: &mut Vec<chapbook_reader::chapbook_core::TocEntry>,
+    ) {
+        for entry in entries {
+            out.push(entry.clone());
+            walk(&entry.children, out);
+        }
+    }
+    let mut flat = Vec::new();
+    walk(s.toc(), &mut flat);
+    let Some(entry) = flat.get(index as usize) else {
+        return 0;
+    };
+    s.goto_toc(entry) as jboolean
+}
+
+/// Search the whole book, keeping at most `limit` hits (0 for a sane
+/// cap). Returns how many were found; read them with [`searchHit`] and
+/// [`searchContext`]. Blocking — run it off the UI thread.
+///
+/// [`searchHit`]: Java_com_ophymx_chapbook_Native_searchHit
+/// [`searchContext`]: Java_com_ophymx_chapbook_Native_searchContext
+#[no_mangle]
+pub extern "system" fn Java_com_ophymx_chapbook_Native_search(
+    mut env: JNIEnv,
+    _class: JClass,
+    handle: jlong,
+    query: JString,
+    limit: jint,
+) -> jint {
+    let (Some(shell), Some(query)) = (unsafe { shell(handle) }, string_in(&mut env, &query)) else {
+        return 0;
+    };
+    let limit = if limit <= 0 { 500 } else { limit as usize };
+    shell.hits = shell.session.search(&query, limit);
+    shell.hits.len() as jint
+}
+
+/// Search one unit — the worker-drivable half. Replaces the last
+/// search's results, as [`search`] does.
+///
+/// [`search`]: Java_com_ophymx_chapbook_Native_search
+#[no_mangle]
+pub extern "system" fn Java_com_ophymx_chapbook_Native_searchUnit(
+    mut env: JNIEnv,
+    _class: JClass,
+    handle: jlong,
+    spine: jint,
+    query: JString,
+) -> jint {
+    let (Some(shell), Some(query)) = (unsafe { shell(handle) }, string_in(&mut env, &query)) else {
+        return 0;
+    };
+    if spine < 0 || spine as usize >= shell.session.spine_len() {
+        return -1;
+    }
+    shell.hits = shell.session.search_unit(spine as usize, &query);
+    shell.hits.len() as jint
+}
+
+/// One hit's plain data: `[spine, start, end, matchStart, matchEnd]`,
+/// empty past the end. Its context rides [`searchContext`].
+///
+/// [`searchContext`]: Java_com_ophymx_chapbook_Native_searchContext
+#[no_mangle]
+pub extern "system" fn Java_com_ophymx_chapbook_Native_searchHit(
+    env: JNIEnv,
+    _class: JClass,
+    handle: jlong,
+    index: jint,
+) -> jlongArray {
+    let values: Vec<jlong> = unsafe { shell(handle) }
+        .and_then(|shell| {
+            shell.hits.get(index as usize).map(|hit| {
+                vec![
+                    hit.locator.spine_index as jlong,
+                    hit.locator.char_offset as jlong,
+                    hit.end as jlong,
+                    hit.match_range.0 as jlong,
+                    hit.match_range.1 as jlong,
+                ]
+            })
+        })
+        .unwrap_or_default();
+    long_array_out(&env, &values)
+}
+
+/// A hit's context — the match with a little text either side,
+/// whitespace collapsed, for a results list.
+#[no_mangle]
+pub extern "system" fn Java_com_ophymx_chapbook_Native_searchContext(
+    env: JNIEnv,
+    _class: JClass,
+    handle: jlong,
+    index: jint,
+) -> jstring {
+    let context = unsafe { shell(handle) }
+        .and_then(|shell| shell.hits.get(index as usize).map(|h| h.context.clone()));
+    match context {
+        Some(context) => string_out(&env, &context),
+        None => JObject::null().into_raw(),
+    }
+}
+
+/// The reader's durable position, packed `(spine << 32) | offset` — the
+/// one the library stores and marks anchor to, unmoved by a font-size
+/// change. `position` reports the view.
+#[no_mangle]
+pub extern "system" fn Java_com_ophymx_chapbook_Native_locator(
+    _env: JNIEnv,
+    _class: JClass,
+    handle: jlong,
+) -> jlong {
+    unsafe { session(handle) }.map_or(-1, |s| {
+        let locator = s.locator();
+        ((locator.spine_index as jlong) << 32) | (locator.char_offset as jlong & 0xffff_ffff)
+    })
+}
+
+/// Jump to a locator. False for a spine index the book does not have;
+/// an offset past the unit's text lands at its end.
+#[no_mangle]
+pub extern "system" fn Java_com_ophymx_chapbook_Native_gotoLocator(
+    _env: JNIEnv,
+    _class: JClass,
+    handle: jlong,
+    spine: jint,
+    offset: jint,
+) -> jboolean {
+    if spine < 0 {
+        return 0;
+    }
+    unsafe { session(handle) }.is_some_and(|s| {
+        s.goto(chapbook_reader::chapbook_core::Locator::new(
+            spine as usize,
+            offset as u32,
+        ))
+    }) as jboolean
+}
+
+/// Jump to an element id within a unit — a footnote, a cross-reference.
+/// A fragment the unit does not carry lands at the unit's start.
+#[no_mangle]
+pub extern "system" fn Java_com_ophymx_chapbook_Native_gotoAnchor(
+    mut env: JNIEnv,
+    _class: JClass,
+    handle: jlong,
+    spine: jint,
+    fragment: JString,
+) -> jboolean {
+    let Some(fragment) = string_in(&mut env, &fragment) else {
+        return 0;
+    };
+    if spine < 0 {
+        return 0;
+    }
+    unsafe { session(handle) }.is_some_and(|s| s.goto_anchor(spine as usize, &fragment)) as jboolean
+}
+
+/// Whether the Back action has anywhere to return to — what greys out a
+/// back button.
+#[no_mangle]
+pub extern "system" fn Java_com_ophymx_chapbook_Native_canGoBack(
+    _env: JNIEnv,
+    _class: JClass,
+    handle: jlong,
+) -> jboolean {
+    unsafe { session(handle) }.is_some_and(|s| s.can_go_back()) as jboolean
+}
+
+/// Drop this book's own settings, so it follows the reader's defaults
+/// again.
+#[no_mangle]
+pub extern "system" fn Java_com_ophymx_chapbook_Native_clearBookSettings(
+    _env: JNIEnv,
+    _class: JClass,
+    handle: jlong,
+) {
+    if let Some(s) = unsafe { session(handle) } {
+        s.clear_book_settings();
+    }
 }

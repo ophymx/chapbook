@@ -83,6 +83,18 @@ internal object Native {
     external fun panPage(handle: Long, dx: Float, dy: Float): Boolean
     external fun pageZoom(handle: Long): Float
     external fun pagePan(handle: Long): FloatArray
+    external fun toc(handle: Long): LongArray
+    external fun tocLabel(handle: Long, index: Int): String?
+    external fun gotoToc(handle: Long, index: Int): Boolean
+    external fun search(handle: Long, query: String, limit: Int): Int
+    external fun searchUnit(handle: Long, spine: Int, query: String): Int
+    external fun searchHit(handle: Long, index: Int): LongArray
+    external fun searchContext(handle: Long, index: Int): String?
+    external fun locator(handle: Long): Long
+    external fun gotoLocator(handle: Long, spine: Int, offset: Int): Boolean
+    external fun gotoAnchor(handle: Long, spine: Int, fragment: String): Boolean
+    external fun canGoBack(handle: Long): Boolean
+    external fun clearBookSettings(handle: Long)
     external fun syncOpen(
         libraryDir: String,
         deviceId: String,

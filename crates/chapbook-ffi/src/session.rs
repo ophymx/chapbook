@@ -27,6 +27,10 @@ pub struct cb_session {
     /// borrows — replaced on the next call, which bounds its lifetime.
     pub(crate) events: std::collections::VecDeque<chapbook_reader::SessionEvent>,
     pub(crate) event_message: Option<std::ffi::CString>,
+    /// What the last search found, held so the per-index readers have
+    /// something to read — replaced by the next search, dead with the
+    /// session.
+    pub(crate) hits: Vec<chapbook_reader::SearchHit>,
     /// The tap policy for this session — beside the session rather than a
     /// free-standing struct so the one field a host must *not* choose, the
     /// reading direction, is read off the book on every configuration and
@@ -196,6 +200,7 @@ fn open_with(source: Source, config: *mut cb_config) -> *mut cb_session {
                 zones,
                 events: std::collections::VecDeque::new(),
                 event_message: None,
+                hits: Vec::new(),
             }))
         }
         Err(e) => {
