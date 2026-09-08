@@ -73,6 +73,13 @@ pub enum cb_status {
     CB_ERR_CREDENTIAL = -24,
     CB_ERR_PANEL = -25,
     CB_ERR_IO = -26,
+    /// The catalog wants credentials, and said so with an
+    /// authentication document — read it with the `cb_catalog_auth_*`
+    /// calls, put up a native login, set the credential, and fetch
+    /// again. A response, not a failure: it is how OPDS says "who are
+    /// you", and treating it as an error is what produces a reader that
+    /// cannot open a subscription catalog at all.
+    CB_ERR_AUTH_REQUIRED = -27,
 }
 
 impl cb_status {

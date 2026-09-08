@@ -109,6 +109,7 @@
 
 mod abi;
 mod annotations;
+mod catalog;
 mod config;
 mod error;
 mod http;
@@ -124,6 +125,14 @@ pub use annotations::{
     cb_session_add_note, cb_session_annotation, cb_session_annotation_color,
     cb_session_annotation_count, cb_session_annotation_text, cb_session_goto_annotation,
     cb_session_highlight_at, cb_session_remove_annotation, cb_session_set_highlight_color,
+};
+pub use catalog::{
+    cb_catalog, cb_catalog_auth_offers_basic, cb_catalog_auth_title, cb_catalog_close,
+    cb_catalog_download, cb_catalog_entry, cb_catalog_entry_author, cb_catalog_entry_count,
+    cb_catalog_entry_text, cb_catalog_facet, cb_catalog_facet_count, cb_catalog_facet_text,
+    cb_catalog_feed_title, cb_catalog_fetch, cb_catalog_has_search, cb_catalog_open,
+    cb_catalog_page, cb_catalog_page_href, cb_catalog_search, cb_catalog_set_authorization,
+    cb_catalog_set_basic_auth, cb_entry, cb_entry_field, cb_entry_kind, cb_facet, cb_facet_field,
 };
 pub use config::{
     cb_config, cb_config_free, cb_config_new, cb_config_set_cache_budget,

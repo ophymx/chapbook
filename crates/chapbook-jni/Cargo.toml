@@ -21,7 +21,7 @@ crate-type = ["cdylib", "rlib"]
 # renders and conforms; it just never comes back where it was left.
 # `opds` stays off: it is the only feature that pulls in TLS, and the
 # trust-store question is not settled here (see `android/README.md`).
-chapbook-reader = { workspace = true, features = ["library", "cbz", "pdf", "svg", "mathml"] }
+chapbook-reader = { workspace = true, features = ["library", "cbz", "pdf", "opds", "svg", "mathml"] }
 # Deliberately without `ureq`: a bundled TLS stack would trust
 # webpki-roots and ignore Android's user CAs, enterprise roots and
 # network security config. The transport comes from Kotlin, over the

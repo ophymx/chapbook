@@ -116,6 +116,22 @@ internal object Native {
     ): Boolean
     external fun librarySyncProgressionUrl(handle: Long, book: Long): String?
     external fun librarySyncAnnotationContainer(handle: Long, book: Long): String?
+    external fun catalogOpen(transport: SyncTransport): Long
+    external fun catalogClose(handle: Long)
+    external fun catalogSetAuthorization(handle: Long, value: String?)
+    external fun catalogSetBasicAuth(handle: Long, username: String, password: String)
+    external fun catalogFetch(handle: Long, url: String): Int
+    external fun catalogSearch(handle: Long, query: String): Int
+    external fun catalogFeedTitle(handle: Long): String?
+    external fun catalogEntryCount(handle: Long): Int
+    external fun catalogEntry(handle: Long, index: Int): LongArray
+    external fun catalogEntryText(handle: Long, index: Int, field: Int): String?
+    external fun catalogEntryAuthor(handle: Long, index: Int, author: Int): String?
+    external fun catalogPageHref(handle: Long, direction: Int): String?
+    external fun catalogHasSearch(handle: Long): Boolean
+    external fun catalogDownload(handle: Long, index: Int, libraryDir: String): Long
+    external fun catalogAuthTitle(handle: Long): String?
+    external fun catalogAuthOffersBasic(handle: Long): Boolean
     external fun position(handle: Long): Long
     external fun title(handle: Long): String
     external fun renderSize(handle: Long): Long
