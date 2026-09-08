@@ -44,6 +44,26 @@ public enum EngineLog {
         sink.replace(nil)
     }
 
+    /// Emit one of the app's own lines through whatever sink is
+    /// installed.
+    ///
+    /// Here so an app's messages land in the engine's stream *in order*
+    /// with the engine's own, which is the entire reason an interleaved
+    /// log is worth having — one path, one ordering, one place to read
+    /// when a reader sends a bug report. `target` names the subsystem a
+    /// filter can key on, and defaults to `host`.
+    public static func write(
+        _ message: String, level: Level = .info, target: String? = nil
+    ) {
+        withOptionalCString(target) { target in
+            _ = cb_log(level.rawValue, target, message)
+        }
+    }
+
+    /// Whether a sink is installed at all — for an app deciding whether
+    /// to bother formatting something expensive.
+    public static var isEnabled: Bool { cb_log_enabled() }
+
     fileprivate static let sink = Sink()
 
     fileprivate final class Sink: @unchecked Sendable {

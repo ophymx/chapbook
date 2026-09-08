@@ -13,7 +13,51 @@ public struct FontSource: Sendable {
         case embedded(directory: String, family: String)
     }
 
+    /// The five CSS generic families, spelled out together.
+    ///
+    /// There is no partial form on purpose: every platform's built-in
+    /// answer is wrong somewhere and wrong *silently* — fontdb's defaults
+    /// are Microsoft family names no phone has — so an app that touches
+    /// the generics at all names every one of them.
+    public struct Generics: Hashable, Sendable {
+        public var serif: String
+        public var sansSerif: String
+        public var monospace: String
+        public var cursive: String
+        public var fantasy: String
+
+        public init(
+            serif: String,
+            sansSerif: String,
+            monospace: String,
+            cursive: String,
+            fantasy: String
+        ) {
+            self.serif = serif
+            self.sansSerif = sansSerif
+            self.monospace = monospace
+            self.cursive = cursive
+            self.fantasy = fantasy
+        }
+    }
+
+    /// What the five generics resolve to. Mutually exclusive by
+    /// construction, because the underlying calls overwrite each other in
+    /// the order they are made and an app should not have to know that.
+    enum GenericsChoice: Sendable {
+        /// Whatever the preset chose — the host's idea on `.host`, the
+        /// one named family on `.embedded`.
+        case preset
+        /// Chapbook's own table for the platform this build targets.
+        case platform
+        case explicit(Generics)
+    }
+
     let kind: Kind
+    /// Searched recursively, and added *after* the preset, so these
+    /// compose with it rather than replacing it.
+    var extraDirectories: [String] = []
+    var genericsChoice: GenericsChoice = .preset
 
     /// The platform's own font collection. Correct on macOS; on iOS it
     /// resolves to an empty database today (fontdb has no iOS branch) and
@@ -27,6 +71,34 @@ public struct FontSource: Sendable {
         FontSource(kind: .embedded(directory: directory.path, family: family))
     }
 
+    /// Add a directory of faces, searched recursively — the app's own
+    /// bundled typefaces alongside a preset, rather than instead of it.
+    public func addingDirectory(_ directory: URL) -> FontSource {
+        var copy = self
+        copy.extraDirectories.append(directory.path)
+        return copy
+    }
+
+    /// Point the five CSS generics at families of the app's choosing.
+    public func settingGenerics(_ generics: Generics) -> FontSource {
+        var copy = self
+        copy.genericsChoice = .explicit(generics)
+        return copy
+    }
+
+    /// Take chapbook's own table of the five generics for this platform.
+    ///
+    /// The middle option between asking the host — right on a Mac, a coin
+    /// toss on a phone — and spelling all five out: the app asks for the
+    /// engine's best answer without also having to know which platforms
+    /// need one. `Session.unresolvedFontGenerics()` still names any that
+    /// resolve to nothing, however they were set.
+    public func usingPlatformGenerics() -> FontSource {
+        var copy = self
+        copy.genericsChoice = .platform
+        return copy
+    }
+
     /// Build the C-side source. The caller owns the result until it is
     /// consumed by `cb_config_new`.
     func makeRaw() throws -> OpaquePointer {
@@ -38,6 +110,27 @@ public struct FontSource: Sendable {
                 cb_font_source_embedded(directory, family)
             }
         guard let raw else { throw ChapbookError.openFailure() }
+        do {
+            for directory in extraDirectories {
+                try check(cb_font_source_add_dir(raw, directory))
+            }
+            switch genericsChoice {
+            case .preset:
+                break
+            case .platform:
+                try check(cb_font_source_use_platform_generics(raw))
+            case .explicit(let generics):
+                try check(
+                    cb_font_source_set_generics(
+                        raw, generics.serif, generics.sansSerif, generics.monospace,
+                        generics.cursive, generics.fantasy))
+            }
+        } catch {
+            // Nothing has consumed it yet, so freeing it here is ours to
+            // do — `cb_config_new` is the only other thing that would.
+            cb_font_source_free(raw)
+            throw error
+        }
         return raw
     }
 }

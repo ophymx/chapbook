@@ -1,6 +1,15 @@
 import CChapbook
 import Foundation
 
+/// What kind of book is open. Comics and PDFs page as images, which is
+/// why an app may want to know before offering text-shaped affordances —
+/// a font picker, a selection gesture, "chapter" rather than "page".
+public enum BookKind: UInt32, Sendable {
+    case epub = 0
+    case comic = 1
+    case pdf = 2
+}
+
 /// An open book.
 ///
 /// Deliberately **not** `Sendable`. The handle underneath is `Send` and
@@ -94,6 +103,13 @@ public final class Session {
         return ReadingDirection(rawValue: raw) ?? .leftToRight
     }
 
+    /// Whether the open book pages as text or as images.
+    public func bookKind() throws -> BookKind {
+        var raw: UInt32 = 0
+        try check(cb_session_book_kind(self.raw, &raw))
+        return BookKind(rawValue: raw) ?? .epub
+    }
+
     // MARK: Navigation
 
     /// Returns whether the position moved — use it, never a position
@@ -183,6 +199,15 @@ public final class Session {
         return bytes
     }
 
+    /// The ceiling those bytes are held under — what
+    /// `SessionConfiguration.cacheBudgetBytes` set, or the engine's own
+    /// default.
+    public func cacheBudget() throws -> Int {
+        var bytes = 0
+        try check(cb_session_cache_budget(raw, &bytes))
+        return bytes
+    }
+
     // MARK: Fonts, diagnosed
 
     /// How many faces the font source produced — worth logging once at
@@ -191,6 +216,49 @@ public final class Session {
         var count = 0
         try check(cb_session_font_face_count(raw, &count))
         return count
+    }
+
+    /// Every font family this session can match, sorted and
+    /// deduplicated — what a typeface picker offers.
+    ///
+    /// **Grows as chapters load**: a book's own `@font-face` families
+    /// join the database when their unit lays out, so refresh this on a
+    /// unit change rather than reading it once at open.
+    public func fontFamilies() throws -> [String] {
+        var count = 0
+        try check(cb_session_font_family_count(raw, &count))
+        // Read throwing rather than lossy: the failure this can actually
+        // hit is a row going past the end because the list grew under the
+        // walk, and a shorter array with no error is how that becomes a
+        // picker quietly missing a face.
+        return try (0..<count).map { index in
+            try readOptionalString { cb_session_font_family_at(self.raw, index, $0, $1, $2) } ?? ""
+        }
+    }
+
+    /// The reader's chosen family, or `nil` for the publisher's own.
+    ///
+    /// Empty and unset are the same answer on purpose, so a picker
+    /// showing "Publisher's font" tests one thing rather than
+    /// remembering a sentinel.
+    public func fontFamily() -> String? {
+        let chosen = readString { cb_session_font_family(self.raw, $0, $1, $2) }
+        return chosen.flatMap { $0.isEmpty ? nil : $0 }
+    }
+
+    /// Choose the typeface the reader sees, keeping their place across
+    /// the reflow. `nil` returns the book to the publisher's font.
+    ///
+    /// This beats the publisher's own `font-family`, which is the point —
+    /// nearly every real EPUB sets one. Monospace is left alone, so code
+    /// listings stay legible. A name no loaded face answers to is not an
+    /// error: the cascade moves on, exactly as it would for an unknown
+    /// family in a stylesheet, so offer only names [`fontFamilies()`]
+    /// reported if you want certainty.
+    public func setFontFamily(_ family: String?, scope: SettingsScope) throws {
+        try withOptionalCString(family) { family in
+            try check(cb_session_set_font_family(self.raw, family, scope.rawValue))
+        }
     }
 
     /// Generic families that resolved to a name no loaded face carries,

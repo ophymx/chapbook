@@ -115,6 +115,55 @@ No credential crosses the boundary; a service behind auth wants a
 through `drainReports()`, one per book and then `.finished`; the worker
 owns a thread, and letting the last reference go joins it.
 
+The rest of the reader's interactive surface is wrapped in the shapes
+Swift expects, and the package now covers every entry point in
+`chapbook.h` except `cb_font_source_android_system`, which resolves to
+nothing off Android:
+
+- **Getting somewhere** — `tableOfContents()` returns entries carrying
+  their nesting and their index, `go(to:)` takes a `TOCEntry`, a
+  `Locator` or an `Annotation`, and `go(toAnchor:inSpine:)` takes a
+  fragment. `locator()` is the durable place to save; `position()` is
+  the view. Jumps push the back trail and page turns do not, which is
+  what `canGoBack()` reports.
+- **Presses, in the order `docs/SHELLS.md` fixes**: `link(at:)`, then
+  `highlight(at:)`, then the tap zones. Links and highlights are exact,
+  so a miss falls through naturally — ask in the other order and the
+  turn band swallows every link in the outer thirds, which reads as
+  "links don't work in this app" rather than as a precedence bug.
+  `follow(link:)` answers `false` for an external URL, which is the
+  app's cue to open a browser.
+- **Selection** — `beginSelection(at:)` / `dragSelection(to:)` /
+  `clearSelection()` for press-drag, `selectWord(at:)` for a long
+  press, `select(_:)` to place one directly, and `selectedText()` for
+  the clipboard. Grab-handle geometry is `rects(for:)` over
+  `selectedRange()`.
+- **Marks** — `addBookmark()`, `addHighlight()`, `addNote(_:)`,
+  `annotations()`, `setHighlightColor(_:for:)`, `removeAnnotation(_:)`.
+  They persist in the library and travel to the book's annotation
+  container on the next sync, so a removal here is a removal
+  everywhere. Ids are stable; **indices are not across a mutation**, so
+  re-enumerate after an add or remove.
+- **Search** — `search(_:limit:)` blocks over the whole spine and
+  belongs off the main actor; `searchUnit(_:for:)` is the
+  worker-drivable half. A hit carries both a `locator` to jump to and
+  the `locators` to hand `select(_:)`, which is how it gets painted.
+- **Typefaces** — `fontFamilies()` for the picker, `fontFamily()` /
+  `setFontFamily(_:scope:)` for the choice, and `FontSource` gained
+  `addingDirectory(_:)`, `settingGenerics(_:)` and
+  `usingPlatformGenerics()`. The generics have no partial form on
+  purpose: every platform's built-in answer is wrong somewhere and
+  wrong silently.
+- **Pinch and pan** (`Zoom.swift`) are image-book only and answer
+  `false` on reflowable text, where the same gesture means "bigger
+  text" — a settings change the app maps to the font actions itself.
+  Input is mapped through the zoom automatically; output geometry stays
+  in fit-page space, so an app maps its own overlays forward with
+  `view = fit * zoom + pan`.
+- **`EngineLog.write(_:level:target:)`** puts the app's own lines in the
+  engine's stream, in order with the engine's — one path and one
+  ordering to read when a reader sends a bug report.
+
 `Session.drainEvents()` is the session narrating what is not "repaint":
 loads landing and failing, the position moving (moves the app did not
 make included), the book finishing. Drain after a wake or an action —

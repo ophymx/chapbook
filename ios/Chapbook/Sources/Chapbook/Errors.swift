@@ -64,6 +64,29 @@ func readString(
     )
 }
 
+/// The same idiom where `CB_ERR_UNAVAILABLE` is an *answer* rather than a
+/// failure — no link under that point, nothing selected, a mark wearing
+/// the theme's color. [`readString`] cannot tell that apart from a real
+/// error because it reports both as `nil`; this can, so the callers that
+/// have a meaningful "there is none" use it and throw on anything else.
+func readOptionalString(
+    _ call: (UnsafeMutablePointer<CChar>?, Int, UnsafeMutablePointer<Int>?) -> Int32
+) throws -> String? {
+    var needed = 0
+    let probe = call(nil, 0, &needed)
+    if probe == C.unavailable { return nil }
+    // The sizing call always reports too-small, an empty string included:
+    // it asks for the NUL. So `needed` is at least 1 by here.
+    guard probe == C.bufferTooSmall, needed > 0 else { throw ChapbookError.last(probe) }
+    var buf = [CChar](repeating: 0, count: needed)
+    try check(call(&buf, buf.count, &needed))
+    guard needed >= 1 else { return "" }
+    return String(
+        decoding: buf[..<(needed - 1)].map { UInt8(bitPattern: $0) },
+        as: UTF8.self
+    )
+}
+
 func lastErrorMessage() -> String {
     readString { cb_last_error_message($0, $1, $2) } ?? ""
 }
