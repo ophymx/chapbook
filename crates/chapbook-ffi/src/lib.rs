@@ -115,6 +115,7 @@ mod http;
 mod input;
 mod library;
 mod logging;
+mod navigation;
 mod session;
 mod sync;
 
@@ -144,6 +145,12 @@ pub use input::{
 };
 pub use library::*;
 pub use logging::{cb_log, cb_log_enabled, cb_log_fn, cb_log_level, cb_set_log_callback};
+pub use navigation::{
+    cb_search_hit, cb_session_can_go_back, cb_session_goto, cb_session_goto_anchor,
+    cb_session_goto_toc, cb_session_locator, cb_session_search, cb_session_search_context,
+    cb_session_search_hit, cb_session_search_unit, cb_session_toc_count, cb_session_toc_entry,
+    cb_session_toc_label, cb_toc_entry,
+};
 pub use session::*;
 pub use sync::{
     cb_sync, cb_sync_close, cb_sync_kind, cb_sync_next, cb_sync_open, cb_sync_position,

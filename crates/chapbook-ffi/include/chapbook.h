@@ -955,6 +955,54 @@ typedef struct cb_collection {
 typedef void (*cb_log_fn)(cb_log_level level, const char *target, const char *message, void *user);
 
 /**
+ * One table-of-contents entry, flattened. Its label travels on
+ * [`cb_session_toc_label`].
+ */
+typedef struct cb_toc_entry {
+    /**
+     * Nesting depth: 0 for a top-level entry, 1 for its children.
+     */
+    size_t depth;
+    /**
+     * The spine unit it points at. Meaningful only when `has_spine`;
+     * a heading that links nowhere has none.
+     */
+    size_t spine;
+    bool has_spine;
+    /**
+     * Whether the entry points inside its unit rather than at its
+     * start — a fragment. Nothing a host must act on; the jump handles
+     * it either way.
+     */
+    bool has_fragment;
+} cb_toc_entry;
+
+/**
+ * One search hit. Its context travels on
+ * [`cb_session_search_context`].
+ */
+typedef struct cb_search_hit {
+    /**
+     * The unit the match is in.
+     */
+    size_t spine;
+    /**
+     * Locator offset of the match's first character, and just past its
+     * last — the range to hand
+     * [`cb_session_select_range`](crate::cb_session_select_range) after
+     * jumping, which is how a hit gets painted on the page.
+     */
+    uint32_t start;
+    uint32_t end;
+    /**
+     * Char range of the match within the context string, so a results
+     * list can embolden the matched words rather than the whole line.
+     */
+    uint32_t match_start;
+    uint32_t match_end;
+} cb_search_hit;
+
+/**
  * The page box, in logical units, plus the scale that turns it into
  * device pixels. Laying out at logical size and rasterizing at device
  * size is what keeps text a readable size on a dense panel.
@@ -1889,6 +1937,123 @@ cb_status cb_log(cb_log_level level, const char *target, const char *message);
  * bother formatting something expensive.
  */
 bool cb_log_enabled(void);
+
+/**
+ * How many entries the contents hold, flattened. Zero for a book with
+ * none, which is ordinary — a comic has no contents.
+ */
+cb_status cb_session_toc_count(const struct cb_session *session, size_t *count);
+
+/**
+ * One entry's plain data, by index.
+ */
+cb_status cb_session_toc_entry(const struct cb_session *session,
+                               size_t index,
+                               struct cb_toc_entry *out);
+
+/**
+ * An entry's label — what a contents menu shows.
+ */
+cb_status cb_session_toc_label(const struct cb_session *session,
+                               size_t index,
+                               char *buf,
+                               size_t cap,
+                               size_t *needed);
+
+/**
+ * Jump to a contents entry by index. `*moved` is false for an entry
+ * that links nowhere — a section heading — which is not an error and is
+ * why a host may show them all.
+ *
+ * The jump pushes the return position for the `Back` action, like a
+ * followed link.
+ */
+cb_status cb_session_goto_toc(struct cb_session *session, size_t index, bool *moved);
+
+/**
+ * Search the whole book, keeping at most `limit` hits (0 for a sane
+ * cap). `*count` is how many were found.
+ *
+ * Blocking and potentially slow: it lays out nothing, but it reads and
+ * folds every unit's text, so a shell with a responsive search box runs
+ * it off its UI thread or walks units itself with
+ * [`cb_session_search_unit`].
+ *
+ * The hits are held until the next search or the session's close; read
+ * them with [`cb_session_search_hit`] and
+ * [`cb_session_search_context`].
+ */
+cb_status cb_session_search(struct cb_session *session,
+                            const char *query,
+                            size_t limit,
+                            size_t *count);
+
+/**
+ * Search one unit — the worker-drivable half, for a shell that wants
+ * results as they arrive rather than after the whole book. Replaces
+ * whatever the last search left, same as [`cb_session_search`].
+ */
+cb_status cb_session_search_unit(struct cb_session *session,
+                                 size_t spine,
+                                 const char *query,
+                                 size_t *count);
+
+/**
+ * One hit's plain data, by index into the last search's results.
+ */
+cb_status cb_session_search_hit(const struct cb_session *session,
+                                size_t index,
+                                struct cb_search_hit *out);
+
+/**
+ * A hit's context: the match with a little text either side,
+ * whitespace collapsed, for a results list.
+ */
+cb_status cb_session_search_context(const struct cb_session *session,
+                                    size_t index,
+                                    char *buf,
+                                    size_t cap,
+                                    size_t *needed);
+
+/**
+ * The reader's position as a locator — a spine index and a character
+ * offset into that unit's text.
+ *
+ * This is the *durable* position, the one the library stores, marks
+ * anchor to and sync carries, and it does not move when the font size
+ * does. [`cb_session_position`](crate::cb_session_position) reports the
+ * view — which page of the current pagination — and that one does.
+ */
+cb_status cb_session_locator(const struct cb_session *session, size_t *spine, uint32_t *offset);
+
+/**
+ * Jump to a locator — a place saved earlier, a hit from a search, a
+ * position another device reached. `*moved` is false for a spine index
+ * the book does not have; an offset past the unit's text lands at its
+ * end rather than failing.
+ *
+ * The jump pushes the return position for the `Back` action.
+ */
+cb_status cb_session_goto(struct cb_session *session, size_t spine, uint32_t offset, bool *moved);
+
+/**
+ * Jump to an element id within a unit — a footnote, a cross-reference,
+ * a contents fragment. A fragment the unit does not carry lands at the
+ * unit's start rather than failing; `*moved` is false only for a spine
+ * index the book does not have.
+ */
+cb_status cb_session_goto_anchor(struct cb_session *session,
+                                 size_t spine,
+                                 const char *fragment,
+                                 bool *moved);
+
+/**
+ * Whether the `Back` action has anywhere to return to — what greys out
+ * a back button. The action itself is
+ * [`cb_session_apply`](crate::cb_session_apply) with `CB_ACTION_BACK`;
+ * this is the question a host cannot otherwise ask.
+ */
+cb_status cb_session_can_go_back(const struct cb_session *session, bool *can);
 
 /**
  * Open a book from a filesystem path. **Consumes `config`** either way.

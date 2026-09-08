@@ -9,6 +9,35 @@ data class Position(val spine: Int, val page: Int)
 /** What kind of book a session opened. */
 enum class BookKind { EPUB, COMIC, PDF }
 
+/** The durable position: a unit, and a character offset within it. */
+data class Locator(val spine: Int, val offset: Int)
+
+/** One flattened table-of-contents entry. */
+data class TocEntry(
+    val label: String,
+    /** 0 for a top-level entry, 1 for its children. */
+    val depth: Int,
+    /** The unit it points at, or null for a heading that links nowhere. */
+    val spine: Int?,
+    /** Whether it points inside its unit rather than at the start. */
+    val hasFragment: Boolean,
+    /** Its place in the flattened list — what [Session.gotoToc] takes. */
+    val index: Int,
+)
+
+/** One search hit. */
+data class SearchHit(
+    val spine: Int,
+    /** Locator offsets of the match — hand these to [Session.selectRange]. */
+    val start: Int,
+    val end: Int,
+    /** The match with a little text either side, for a results list. */
+    val context: String,
+    /** Char range of the match within [context]. */
+    val matchStart: Int,
+    val matchEnd: Int,
+)
+
 /** What kind of mark a row is. */
 enum class AnnotationKind { BOOKMARK, HIGHLIGHT, NOTE }
 
@@ -424,6 +453,86 @@ class Session private constructor(private var handle: Long) : AutoCloseable {
             val values = Native.pagePan(handle)
             return if (values.size == 2) values[0] to values[1] else 0f to 0f
         }
+
+    // ---- Contents, search and the locator ----
+
+    /**
+     * The contents, flattened into reading order with a depth per entry
+     * — what a menu draws directly, and what a tree can still be rebuilt
+     * from. Entries that link nowhere are kept: they are section
+     * headings, and dropping them would orphan their children.
+     */
+    fun toc(): List<TocEntry> {
+        val rows = Native.toc(handle)
+        return (0 until rows.size / 4).map { index ->
+            val base = index * 4
+            TocEntry(
+                label = Native.tocLabel(handle, index) ?: "",
+                depth = rows[base].toInt(),
+                spine = if (rows[base + 2] != 0L) rows[base + 1].toInt() else null,
+                hasFragment = rows[base + 3] != 0L,
+                index = index,
+            )
+        }
+    }
+
+    /** Jump to a contents entry. False for one that links nowhere. */
+    fun gotoToc(entry: TocEntry): Boolean = Native.gotoToc(handle, entry.index)
+
+    /**
+     * Search the whole book, at most [limit] hits (0 for a sane cap).
+     * **Blocking** — run it off the UI thread. Replaces the last
+     * search's results.
+     */
+    fun search(query: String, limit: Int = 0): List<SearchHit> =
+        readHits(Native.search(handle, query, limit))
+
+    /** Search one unit — the half a worker can drive per unit. */
+    fun searchUnit(spine: Int, query: String): List<SearchHit> =
+        readHits(Native.searchUnit(handle, spine, query))
+
+    private fun readHits(count: Int): List<SearchHit> {
+        if (count <= 0) return emptyList()
+        return (0 until count).mapNotNull { index ->
+            val values = Native.searchHit(handle, index)
+            if (values.size < 5) return@mapNotNull null
+            SearchHit(
+                spine = values[0].toInt(),
+                start = values[1].toInt(),
+                end = values[2].toInt(),
+                context = Native.searchContext(handle, index) ?: "",
+                matchStart = values[3].toInt(),
+                matchEnd = values[4].toInt(),
+            )
+        }
+    }
+
+    /**
+     * The durable position: the unit and the character offset in it.
+     * This is what the library stores and marks anchor to, and it does
+     * not move when the font size does — [position] is the view, and
+     * that one does.
+     */
+    val locator: Locator?
+        get() {
+            val packed = Native.locator(handle)
+            if (packed < 0) return null
+            return Locator((packed ushr 32).toInt(), (packed and 0xffff_ffffL).toInt())
+        }
+
+    /** Jump to a locator — a saved place, a search hit, another device's. */
+    fun goto(locator: Locator): Boolean =
+        Native.gotoLocator(handle, locator.spine, locator.offset)
+
+    /** Jump to an element id in a unit — a footnote, a cross-reference. */
+    fun gotoAnchor(spine: Int, fragment: String): Boolean =
+        Native.gotoAnchor(handle, spine, fragment)
+
+    /** Whether Back has anywhere to go — what greys out a back button. */
+    val canGoBack: Boolean get() = Native.canGoBack(handle)
+
+    /** Drop this book's own settings; it follows the defaults again. */
+    fun clearBookSettings() = Native.clearBookSettings(handle)
 
     /** Every mark this book carries, ordered by progression. */
     fun annotations(): List<Annotation> {
