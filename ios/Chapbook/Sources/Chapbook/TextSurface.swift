@@ -20,10 +20,14 @@ extension Session {
         public let text: String
     }
 
-    /// One word: where it sits in the speakable string (char offsets) and
-    /// in locator space. Speech progress reports index the string; the
-    /// locator range is how they become a highlight via `rects(for:)`.
+    /// One word: where it sits in the speakable string and in locator
+    /// space. Speech progress reports index the string; the locator range
+    /// is how they become a highlight via `rects(for:)`.
     public struct WordSpan: Hashable, Sendable {
+        /// **Unicode scalar offsets into `SpeakablePage.text`, not
+        /// `Character` offsets** — index through `text.unicodeScalars`,
+        /// since a `Character` is a grapheme cluster and the engine
+        /// counts scalars.
         public let textRange: Range<UInt32>
         public let locators: Range<UInt32>
     }
