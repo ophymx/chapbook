@@ -260,7 +260,7 @@ pub unsafe extern "C" fn cb_catalog_open(
         }
         #[cfg(not(feature = "opds"))]
         {
-            let (_, _) = (download, out);
+            let _ = (get, download, out);
             decline(
                 cb_status::CB_ERR_FORMAT_NOT_BUILT,
                 "this build has no OPDS support",
