@@ -133,6 +133,7 @@ public enum Status
     Ok = 0,
     Panic = -1,
     NullArgument = -2,
+    InvalidUtf8 = -3,
     BufferTooSmall = -4,
     InvalidArgument = -5,
     Unavailable = -6,
@@ -153,6 +154,14 @@ public enum Status
     Credential = -24,
     Panel = -25,
     Io = -26,
+
+    /// <summary>
+    /// The catalogue wants credentials and said so with an authentication
+    /// document. A response, not a failure: read it through
+    /// <see cref="Catalog.AuthTitle"/> and <see cref="Catalog.AuthOffersBasic"/>,
+    /// put up a login, <see cref="Catalog.SignIn"/>, and fetch again.
+    /// </summary>
+    AuthRequired = -27,
 }
 
 /// <summary>Which format to read bytes as. <see cref="Guess"/> sniffs.</summary>
@@ -363,4 +372,119 @@ public enum Capabilities : uint
     BundledHttp = 16,
     Svg = 32,
     MathMl = 64,
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal struct NativeAnnotation
+{
+    public long Id;
+    public AnnotationKind Kind;
+    public nuint Spine;
+    public double Progression;
+    public byte HasText;
+    public byte HasColor;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal struct NativeTocEntry
+{
+    public nuint Depth;
+    public nuint Spine;
+    public byte HasSpine;
+    public byte HasFragment;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal struct NativeSearchHit
+{
+    public nuint Spine;
+    public uint Start;
+    public uint End;
+    public uint MatchStart;
+    public uint MatchEnd;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal struct NativeEntry
+{
+    public EntryKind Kind;
+    public nuint AuthorCount;
+    public byte CanDownload;
+    public byte IsOpenAccess;
+    public byte HasThumbnail;
+    public byte HasCover;
+    public byte HasSummary;
+    public byte HasSeries;
+    public double SeriesPosition;
+    public byte HasSeriesPosition;
+    public byte SyncsPosition;
+    public byte SyncsAnnotations;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal struct NativeFacet
+{
+    public nuint Group;
+    public byte Active;
+    public ulong Count;
+    public byte HasCount;
+}
+
+/// <summary>What kind of mark an <see cref="Annotation"/> is.</summary>
+/// <remarks>
+/// <c>int</c>-backed like <see cref="SessionEventKind"/>, because the
+/// Rust side is <c>repr(C)</c> rather than <c>repr(u32)</c>. Same for
+/// every enumeration below this line.
+/// </remarks>
+public enum AnnotationKind
+{
+    /// <summary>A point remembered, nothing painted.</summary>
+    Bookmark = 0,
+
+    /// <summary>A range painted on the page.</summary>
+    Highlight = 1,
+
+    /// <summary>A range with words attached.</summary>
+    Note = 2,
+}
+
+/// <summary>What a catalogue row is, which decides what tapping it does.</summary>
+public enum EntryKind
+{
+    /// <summary>
+    /// A place to go: a shelf, a section, another feed. Tapping it fetches
+    /// <see cref="CatalogEntry.Href"/>.
+    /// </summary>
+    Navigation = 0,
+
+    /// <summary>A book. Tapping it downloads.</summary>
+    Publication = 1,
+}
+
+/// <summary>Which of an entry's strings to read.</summary>
+internal enum EntryField
+{
+    Title = 0,
+    Summary = 1,
+    Publisher = 2,
+    Language = 3,
+    Series = 4,
+    ThumbnailUrl = 5,
+    CoverUrl = 6,
+    Href = 7,
+}
+
+/// <summary>Which of a facet's strings to read.</summary>
+internal enum FacetField
+{
+    Label = 0,
+    Group = 1,
+    Href = 2,
+}
+
+/// <summary>Which way through a paged feed.</summary>
+internal enum CatalogPage
+{
+    Next = 0,
+    Previous = 1,
 }

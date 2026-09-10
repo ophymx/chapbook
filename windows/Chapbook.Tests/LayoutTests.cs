@@ -51,6 +51,11 @@ public class LayoutTests
         ("cb_sync_report", typeof(NativeSyncReport)),
         ("cb_http_header", typeof(NativeHttpHeader)),
         ("cb_http_request", typeof(NativeHttpRequest)),
+        ("cb_annotation", typeof(NativeAnnotation)),
+        ("cb_toc_entry", typeof(NativeTocEntry)),
+        ("cb_search_hit", typeof(NativeSearchHit)),
+        ("cb_entry", typeof(NativeEntry)),
+        ("cb_facet", typeof(NativeFacet)),
     ];
 
     [Theory]
