@@ -14,10 +14,32 @@
 //! that is not a regression in chapbook.
 
 use std::path::PathBuf;
+use std::sync::{Mutex, MutexGuard};
 
 use chapbook_core::{EdgeSizes, PageMetrics, Rotation, Size};
 use chapbook_reader::{Session, SessionConfig};
 use chapbook_render_vello::{RenderedPage, VelloRenderer};
+
+/// One GPU device at a time.
+///
+/// Each test here stands up its own wgpu instance and device and tears
+/// them down again, and the harness runs the three on three threads. On
+/// a machine whose only adapter is a software one — the Windows CI
+/// runner's WARP — about one run in four died with an access violation
+/// somewhere inside that, with nothing of chapbook's on the stack and
+/// nothing printed first. Three D3D12 devices being created, compiling
+/// vello's pipelines and dropping in overlapping order is the one thing
+/// these tests do that the rest of the workspace does not, so they take
+/// turns. The library tests serialize for their own reasons the same way.
+static ONE_AT_A_TIME: Mutex<()> = Mutex::new(());
+
+fn serial() -> MutexGuard<'static, ()> {
+    // A test that panicked while holding the lock poisons it; the next
+    // test still gets to run, and its own assertions still mean something.
+    ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
 
 fn fixture(rel: &str) -> String {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -231,6 +253,7 @@ use chapbook_reader::tiny_skia;
 
 #[test]
 fn a_text_page_lands_in_the_same_places_on_both_backends() {
+    let _one_at_a_time = serial();
     let Some(mut vello) = renderer() else { return };
 
     let mut s = session("text", &fixture("epub/illustrated.epub"));
@@ -259,6 +282,7 @@ fn a_text_page_lands_in_the_same_places_on_both_backends() {
 
 #[test]
 fn an_image_page_lands_in_the_same_places_on_both_backends() {
+    let _one_at_a_time = serial();
     let Some(mut vello) = renderer() else { return };
 
     let mut s = session("comic", &fixture("cbz/minimal.cbz"));
@@ -286,6 +310,7 @@ fn an_image_page_lands_in_the_same_places_on_both_backends() {
 
 #[test]
 fn hidpi_scales_the_scene_rather_than_the_pixels() {
+    let _one_at_a_time = serial();
     let Some(mut vello) = renderer() else { return };
 
     let mut s = session("hidpi", &fixture("epub/illustrated.epub"));
