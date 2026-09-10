@@ -27,6 +27,9 @@ internal static class Fixture
 
     internal static string Book(string relative) => Dir(Path.Combine("epub", relative));
 
+    /// <summary>One of the OPDS wire-format fixtures, as bytes to serve.</summary>
+    internal static byte[] Opds(string name) => File.ReadAllBytes(Dir(Path.Combine("opds", name)));
+
     /// <summary>The checked-in C ABI header, which is the contract.</summary>
     internal static string Header()
     {

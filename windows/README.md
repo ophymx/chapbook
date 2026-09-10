@@ -13,9 +13,11 @@ which before reading further.
 | `build-native.ps1` | `chapbook-ffi` → `chapbook_ffi.dll` |
 
 It covers the session, the shelf, the text surface, session events, the
-host transport and sync — everything the header carries except the
-`download` callback, which .NET has no background-transfer facility worth
-the engine deferring to.
+host transport, sync, the selection and the marks, contents, search and
+locators, zoom, and the OPDS catalogue — everything the header carries
+except the `download` callback, which .NET has no background-transfer
+facility worth the engine deferring to, and the two Android-only entry
+points, `cb_session_open_fd` and `cb_font_source_android_system`.
 
 The *other* Windows integration is `crates/chapbook-viewer-win32`, which
 is a Rust shell over `chapbook-reader` directly and shares nothing with

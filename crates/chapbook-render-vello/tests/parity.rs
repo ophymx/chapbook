@@ -11,13 +11,57 @@
 //!
 //! Skipped, not failed, where no wgpu adapter exists: CI machines without
 //! a GPU and without a software Vulkan implementation can't run these, and
-//! that is not a regression in chapbook.
+//! that is not a regression in chapbook. Skipped on WARP too — see
+//! [`on_warp`] — because a rasterizer that takes the process down cannot
+//! rasterize anything worth comparing.
 
 use std::path::PathBuf;
 
 use chapbook_core::{EdgeSizes, PageMetrics, Rotation, Size};
 use chapbook_reader::{Session, SessionConfig};
 use chapbook_render_vello::{RenderedPage, VelloRenderer};
+use vello::wgpu;
+
+/// Whether the adapter the renderer would pick is WARP — D3D12's software
+/// rasterizer, and the only adapter a hosted Windows CI runner has.
+///
+/// vello on WARP took the test process down with `STATUS_ACCESS_VIOLATION`
+/// on five of thirteen Windows CI runs, on the same runner image the
+/// other eight passed on, a few seconds into the first test and with
+/// nothing of chapbook's on the stack. Serializing the three tests did not
+/// change it, so it is not a race between them; it is WARP. Mesa's
+/// software Vulkan runs the same three tests on every Linux CI run and
+/// passes, which is the software-adapter coverage this suite was written
+/// for. A crash inside a driver is not a failure this suite can report, so
+/// on WARP it reports nothing.
+///
+/// The probe requests an adapter the way `VelloRenderer::new` does and
+/// stops there: enumeration never crashed, only what came after it.
+fn on_warp() -> bool {
+    let instance =
+        wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
+    let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+        power_preference: wgpu::PowerPreference::HighPerformance,
+        force_fallback_adapter: false,
+        compatible_surface: None,
+    }))
+    .or_else(|_| {
+        pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::LowPower,
+            force_fallback_adapter: true,
+            compatible_surface: None,
+        }))
+    });
+    let Ok(adapter) = adapter else {
+        return false;
+    };
+    let info = adapter.get_info();
+    if info.backend == wgpu::Backend::Dx12 && info.device_type == wgpu::DeviceType::Cpu {
+        eprintln!("skipping: the only adapter is {} (WARP)", info.name);
+        return true;
+    }
+    false
+}
 
 fn fixture(rel: &str) -> String {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -59,8 +103,12 @@ fn session(name: &str, source: &str) -> Session {
     .unwrap()
 }
 
-/// `None` when the machine has no adapter at all — the test then skips.
+/// `None` when the machine has no adapter at all, or only WARP — the test
+/// then skips.
 fn renderer() -> Option<VelloRenderer> {
+    if on_warp() {
+        return None;
+    }
     match VelloRenderer::new() {
         Ok(renderer) => Some(renderer),
         Err(e) => {

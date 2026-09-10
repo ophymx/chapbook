@@ -434,4 +434,213 @@ internal static partial class Interop
 
     [LibraryImport(Library)]
     internal static partial void cb_sync_close(nint sync);
+
+    // ---- Contents, locators, links ----
+
+    [LibraryImport(Library)]
+    internal static partial Status cb_session_toc_count(nint session, out nuint count);
+
+    [LibraryImport(Library)]
+    internal static partial Status cb_session_toc_entry(
+        nint session, nuint index, out NativeTocEntry entry);
+
+    [LibraryImport(Library)]
+    internal static partial Status cb_session_toc_label(
+        nint session, nuint index, byte[]? buf, nuint cap, out nuint needed);
+
+    [LibraryImport(Library)]
+    internal static partial Status cb_session_goto_toc(nint session, nuint index, out byte moved);
+
+    [LibraryImport(Library)]
+    internal static partial Status cb_session_locator(
+        nint session, out nuint spine, out uint offset);
+
+    [LibraryImport(Library)]
+    internal static partial Status cb_session_goto(
+        nint session, nuint spine, uint offset, out byte moved);
+
+    [LibraryImport(Library, StringMarshalling = StringMarshalling.Utf8)]
+    internal static partial Status cb_session_goto_anchor(
+        nint session, nuint spine, string fragment, out byte moved);
+
+    [LibraryImport(Library)]
+    internal static partial Status cb_session_can_go_back(nint session, out byte can);
+
+    [LibraryImport(Library)]
+    internal static partial Status cb_session_link_at(
+        nint session, float x, float y, byte[]? buf, nuint cap, out nuint needed);
+
+    [LibraryImport(Library, StringMarshalling = StringMarshalling.Utf8)]
+    internal static partial Status cb_session_follow_link(
+        nint session, string href, out byte moved);
+
+    // ---- Search ----
+
+    [LibraryImport(Library, StringMarshalling = StringMarshalling.Utf8)]
+    internal static partial Status cb_session_search(
+        nint session, string query, nuint limit, out nuint count);
+
+    [LibraryImport(Library, StringMarshalling = StringMarshalling.Utf8)]
+    internal static partial Status cb_session_search_unit(
+        nint session, nuint spine, string query, out nuint count);
+
+    [LibraryImport(Library)]
+    internal static partial Status cb_session_search_hit(
+        nint session, nuint index, out NativeSearchHit hit);
+
+    [LibraryImport(Library)]
+    internal static partial Status cb_session_search_context(
+        nint session, nuint index, byte[]? buf, nuint cap, out nuint needed);
+
+    // ---- The selection ----
+
+    [LibraryImport(Library)]
+    internal static partial Status cb_session_selection_begin(
+        nint session, float x, float y, out byte started);
+
+    [LibraryImport(Library)]
+    internal static partial Status cb_session_selection_drag(nint session, float x, float y);
+
+    [LibraryImport(Library)]
+    internal static partial Status cb_session_select_word_at(
+        nint session, float x, float y, out byte selected);
+
+    [LibraryImport(Library)]
+    internal static partial Status cb_session_select_range(nint session, uint start, uint end);
+
+    [LibraryImport(Library)]
+    internal static partial Status cb_session_selection_clear(nint session);
+
+    [LibraryImport(Library)]
+    internal static partial Status cb_session_selected_range(
+        nint session, out uint start, out uint end);
+
+    [LibraryImport(Library)]
+    internal static partial Status cb_session_selected_text(
+        nint session, byte[]? buf, nuint cap, out nuint needed);
+
+    // ---- Marks ----
+
+    [LibraryImport(Library)]
+    internal static partial Status cb_session_add_highlight(nint session, out long id);
+
+    [LibraryImport(Library, StringMarshalling = StringMarshalling.Utf8)]
+    internal static partial Status cb_session_add_note(nint session, string body, out long id);
+
+    [LibraryImport(Library)]
+    internal static partial Status cb_session_add_bookmark(nint session, out long id);
+
+    [LibraryImport(Library)]
+    internal static partial Status cb_session_highlight_at(
+        nint session, float x, float y, out long id);
+
+    [LibraryImport(Library, StringMarshalling = StringMarshalling.Utf8)]
+    internal static partial Status cb_session_set_highlight_color(
+        nint session, long id, string? color);
+
+    [LibraryImport(Library)]
+    internal static partial Status cb_session_remove_annotation(nint session, long id);
+
+    [LibraryImport(Library)]
+    internal static partial Status cb_session_goto_annotation(
+        nint session, long id, out byte moved);
+
+    [LibraryImport(Library)]
+    internal static partial Status cb_session_annotation_count(nint session, out nuint count);
+
+    [LibraryImport(Library)]
+    internal static partial Status cb_session_annotation(
+        nint session, nuint index, out NativeAnnotation annotation);
+
+    [LibraryImport(Library)]
+    internal static partial Status cb_session_annotation_text(
+        nint session, nuint index, byte[]? buf, nuint cap, out nuint needed);
+
+    [LibraryImport(Library)]
+    internal static partial Status cb_session_annotation_color(
+        nint session, nuint index, byte[]? buf, nuint cap, out nuint needed);
+
+    // ---- Zoom ----
+
+    [LibraryImport(Library)]
+    internal static partial Status cb_session_set_page_zoom(
+        nint session, float zoom, float focusX, float focusY, out byte changed);
+
+    [LibraryImport(Library)]
+    internal static partial Status cb_session_pan_page(
+        nint session, float dx, float dy, out byte changed);
+
+    [LibraryImport(Library)]
+    internal static partial Status cb_session_page_zoom(nint session, out float zoom);
+
+    [LibraryImport(Library)]
+    internal static partial Status cb_session_page_pan(nint session, out float x, out float y);
+
+    // ---- The catalogue ----
+
+    [LibraryImport(Library)]
+    internal static partial Status cb_catalog_open(
+        nint get, nint download, nint finalize, nint user, out nint catalog);
+
+    [LibraryImport(Library)]
+    internal static partial void cb_catalog_close(nint catalog);
+
+    [LibraryImport(Library, StringMarshalling = StringMarshalling.Utf8)]
+    internal static partial Status cb_catalog_set_authorization(nint catalog, string? value);
+
+    [LibraryImport(Library, StringMarshalling = StringMarshalling.Utf8)]
+    internal static partial Status cb_catalog_set_basic_auth(
+        nint catalog, string username, string password);
+
+    [LibraryImport(Library, StringMarshalling = StringMarshalling.Utf8)]
+    internal static partial Status cb_catalog_fetch(nint catalog, string url);
+
+    [LibraryImport(Library, StringMarshalling = StringMarshalling.Utf8)]
+    internal static partial Status cb_catalog_search(nint catalog, string query);
+
+    [LibraryImport(Library)]
+    internal static partial Status cb_catalog_feed_title(
+        nint catalog, byte[]? buf, nuint cap, out nuint needed);
+
+    [LibraryImport(Library)]
+    internal static partial Status cb_catalog_entry_count(nint catalog, out nuint count);
+
+    [LibraryImport(Library)]
+    internal static partial Status cb_catalog_entry(nint catalog, nuint index, out NativeEntry entry);
+
+    [LibraryImport(Library)]
+    internal static partial Status cb_catalog_entry_text(
+        nint catalog, nuint index, EntryField field, byte[]? buf, nuint cap, out nuint needed);
+
+    [LibraryImport(Library)]
+    internal static partial Status cb_catalog_entry_author(
+        nint catalog, nuint index, nuint author, byte[]? buf, nuint cap, out nuint needed);
+
+    [LibraryImport(Library)]
+    internal static partial Status cb_catalog_facet_count(nint catalog, out nuint count);
+
+    [LibraryImport(Library)]
+    internal static partial Status cb_catalog_facet(nint catalog, nuint index, out NativeFacet facet);
+
+    [LibraryImport(Library)]
+    internal static partial Status cb_catalog_facet_text(
+        nint catalog, nuint index, FacetField field, byte[]? buf, nuint cap, out nuint needed);
+
+    [LibraryImport(Library)]
+    internal static partial Status cb_catalog_page_href(
+        nint catalog, CatalogPage direction, byte[]? buf, nuint cap, out nuint needed);
+
+    [LibraryImport(Library)]
+    internal static partial Status cb_catalog_has_search(nint catalog, out byte has);
+
+    [LibraryImport(Library, StringMarshalling = StringMarshalling.Utf8)]
+    internal static partial Status cb_catalog_download(
+        nint catalog, nuint index, string libraryDir, out long book);
+
+    [LibraryImport(Library)]
+    internal static partial Status cb_catalog_auth_title(
+        nint catalog, byte[]? buf, nuint cap, out nuint needed);
+
+    [LibraryImport(Library)]
+    internal static partial Status cb_catalog_auth_offers_basic(nint catalog, out byte offers);
 }
