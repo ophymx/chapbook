@@ -196,6 +196,57 @@ fn book_from_reader(format: Format, reader: Box<dyn chapbook_core::ReadSeek>) ->
     }
 }
 
+/// Open a book file as a [`Publication`], deciding its format from its
+/// bytes and falling back to the name only when they say nothing.
+///
+/// The reader has always sniffed this way — "a book is its bytes, not
+/// its name" is one of the workspace's own invariants — but the logic
+/// was private, so every caller that wanted a `Publication` without a
+/// whole session went off and dispatched on the file extension instead,
+/// which is the thing the invariant exists to prevent. This is that
+/// logic, lent out: metadata for an import, a cover, a format check.
+///
+/// A session does not need this — it opens for itself — but importing a
+/// downloaded file does, and so does anything that wants to know what a
+/// file *is* before committing to it.
+pub fn open_publication(path: &Path) -> Result<Box<dyn chapbook_core::Publication>> {
+    Ok(match book_at_path(format_of_path(path), path)? {
+        OpenBook::Epub(book) => book as Box<dyn chapbook_core::Publication>,
+        #[cfg(feature = "_comic")]
+        OpenBook::Comic(book) => Box::new(ArcPublication(book)),
+        #[cfg(feature = "pdf")]
+        OpenBook::Pdf(book) => Box::new(ArcPublication(book)),
+    })
+}
+
+/// A shared publication, borrowed as an owned one. Image-book readers
+/// are held behind `Arc` because the loader thread shares them; a
+/// caller that only wants metadata should not have to know that.
+#[cfg(feature = "_image-book")]
+struct ArcPublication<T: ?Sized>(std::sync::Arc<T>);
+
+#[cfg(feature = "_image-book")]
+impl<T: chapbook_core::Publication + ?Sized> chapbook_core::Publication for ArcPublication<T> {
+    fn kind(&self) -> chapbook_core::BookKind {
+        self.0.kind()
+    }
+    fn metadata(&self) -> &chapbook_core::BookMetadata {
+        self.0.metadata()
+    }
+    fn spine(&self) -> &[chapbook_core::SpineItem] {
+        self.0.spine()
+    }
+    fn toc(&self) -> &[chapbook_core::TocEntry] {
+        self.0.toc()
+    }
+    fn unit_bytes(&self, spine_index: usize) -> Result<Vec<u8>> {
+        self.0.unit_bytes(spine_index)
+    }
+    fn cover(&self) -> Result<Option<chapbook_core::Resource>> {
+        self.0.cover()
+    }
+}
+
 fn book_at_path(format: Format, path: &Path) -> Result<OpenBook> {
     match format {
         Format::Epub | Format::Guess => {

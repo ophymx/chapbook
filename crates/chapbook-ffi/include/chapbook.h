@@ -84,6 +84,15 @@ enum cb_status
     CB_ERR_CREDENTIAL = -24,
     CB_ERR_PANEL = -25,
     CB_ERR_IO = -26,
+    /**
+     * The catalog wants credentials, and said so with an
+     * authentication document — read it with the `cb_catalog_auth_*`
+     * calls, put up a native login, set the credential, and fetch
+     * again. A response, not a failure: it is how OPDS says "who are
+     * you", and treating it as an error is what produces a reader that
+     * cannot open a subscription catalog at all.
+     */
+    CB_ERR_AUTH_REQUIRED = -27,
 };
 #ifndef __cplusplus
 #if __STDC_VERSION__ >= 202311L
@@ -110,6 +119,91 @@ typedef enum cb_annotation_kind {
      */
     CB_ANNOTATION_NOTE = 2,
 } cb_annotation_kind;
+
+/**
+ * What an entry is, which decides what tapping it does.
+ */
+typedef enum cb_entry_kind {
+    /**
+     * A place to go: a shelf, a section, another feed. Tapping it
+     * fetches [`cb_catalog_entry_href`].
+     */
+    CB_ENTRY_NAVIGATION = 0,
+    /**
+     * A book. Tapping it downloads through [`cb_catalog_download`].
+     */
+    CB_ENTRY_PUBLICATION = 1,
+} cb_entry_kind;
+
+/**
+ * Which string an entry accessor should answer with.
+ */
+typedef enum cb_entry_field {
+    /**
+     * The title, as shown on a row.
+     */
+    CB_ENTRY_TITLE = 0,
+    /**
+     * Plain-text summary. HTML descriptions are deliberately not
+     * offered: a host would have to sanitize what it did not parse.
+     */
+    CB_ENTRY_SUMMARY = 1,
+    /**
+     * The publisher.
+     */
+    CB_ENTRY_PUBLISHER = 2,
+    /**
+     * The language tag the catalog states.
+     */
+    CB_ENTRY_LANGUAGE = 3,
+    /**
+     * The series name.
+     */
+    CB_ENTRY_SERIES = 4,
+    /**
+     * A thumbnail's absolute URL — fetch it with the platform's own
+     * image loader, sending the same `Authorization` if the catalog
+     * wants one.
+     */
+    CB_ENTRY_THUMBNAIL_URL = 5,
+    /**
+     * A full cover's absolute URL, for a detail screen.
+     */
+    CB_ENTRY_COVER_URL = 6,
+    /**
+     * Where tapping goes: the feed a navigation entry points at, or a
+     * publication's acquisition. A commercial entry whose only link is
+     * a purchase page answers with that page, which a host opens in a
+     * browser rather than downloading.
+     */
+    CB_ENTRY_HREF = 7,
+} cb_entry_field;
+
+/**
+ * Which of a facet's strings to read.
+ */
+typedef enum cb_facet_field {
+    /**
+     * The facet's own label — "English", "By title".
+     */
+    CB_FACET_LABEL = 0,
+    /**
+     * Its group's name — "Language", "Sort by".
+     */
+    CB_FACET_GROUP = 1,
+    /**
+     * The URL that applies it; hand it to [`cb_catalog_fetch`].
+     */
+    CB_FACET_HREF = 2,
+} cb_facet_field;
+
+/**
+ * Which way through a paged feed.
+ */
+typedef enum cb_catalog_page {
+    CB_PAGE_NEXT = 0,
+    CB_PAGE_PREVIOUS = 1,
+} cb_catalog_page;
 
 /**
  * Which physical edge reading starts from. The book declares it — EPUB's
@@ -670,6 +764,14 @@ typedef uint32_t cb_capability;
 #endif // __cplusplus
 
 /**
+ * An open catalog client, holding the last feed it fetched. Opaque.
+ *
+ * Not thread-safe, like every other handle here: it belongs to one
+ * thread at a time, and may move between them.
+ */
+typedef struct cb_catalog cb_catalog;
+
+/**
  * A session configuration under construction. Opaque.
  */
 typedef struct cb_config cb_config;
@@ -837,6 +939,68 @@ typedef void (*cb_http_download_fn)(const struct cb_http_request *request,
  * engine's lifetimes.
  */
 typedef void (*cb_http_finalize_fn)(void *user);
+
+/**
+ * One row of a catalog listing. Strings travel on their own calls.
+ */
+typedef struct cb_entry {
+    enum cb_entry_kind kind;
+    /**
+     * How many authors [`cb_catalog_entry_author`] will answer for.
+     */
+    size_t author_count;
+    /**
+     * Whether this entry can be downloaded at all. A commercial entry
+     * that offers only a purchase link answers false, and a host should
+     * send the reader to [`cb_catalog_entry_href`] in a browser rather
+     * than pretending it can acquire it.
+     */
+    bool can_download;
+    /**
+     * Freely downloadable, as against borrowed or bought. What tells a
+     * "Get" button from a "Buy" one.
+     */
+    bool is_open_access;
+    bool has_thumbnail;
+    bool has_cover;
+    bool has_summary;
+    bool has_series;
+    /**
+     * Where in its series, when the entry says. Meaningful only with
+     * `has_series` *and* `has_series_position`.
+     */
+    double series_position;
+    bool has_series_position;
+    /**
+     * Whether the entry advertises a position-sync service, an
+     * annotation container, or both. A host does not have to act on
+     * these — [`cb_catalog_download`] records them itself — but a
+     * catalog that syncs is worth saying so on the row.
+     */
+    bool syncs_position;
+    bool syncs_annotations;
+} cb_entry;
+
+/**
+ * One facet: a way to narrow the current feed, as the catalog offers
+ * it. Its label and href travel on their own calls.
+ */
+typedef struct cb_facet {
+    /**
+     * Which group it belongs to — "Language", "Sort by". Facets in a
+     * group are alternatives; a host draws one control per group.
+     */
+    size_t group;
+    /**
+     * Whether this facet is the one currently in force.
+     */
+    bool active;
+    /**
+     * How many entries it would show, when the catalog says.
+     */
+    uint64_t count;
+    bool has_count;
+} cb_facet;
 
 /**
  * What to list, and in what order. Zero-initialize for the whole shelf.
@@ -1347,6 +1511,197 @@ cb_status cb_session_annotation_color(const struct cb_session *session,
                                       char *buf,
                                       size_t cap,
                                       size_t *needed);
+
+/**
+ * Open a catalog client.
+ *
+ * The transport is the host's, on the same terms as everywhere else:
+ * pass `get` and optionally `download` — a host that owns a background
+ * download facility should, since a book is the one transfer worth
+ * surviving a suspended process — or pass both null to use the bundled
+ * one where this build has it. `finalize` releases `user` exactly once,
+ * including on every failure path of this call.
+ */
+cb_status cb_catalog_open(cb_http_get_fn get,
+                          cb_http_download_fn download,
+                          cb_http_finalize_fn finalize,
+                          void *user,
+                          struct cb_catalog **out);
+
+/**
+ * Close a catalog. Accepts null.
+ */
+void cb_catalog_close(struct cb_catalog *catalog);
+
+/**
+ * Send this `Authorization` header value with every request — a bearer
+ * token, or whatever the catalog's own scheme wants. Null clears it.
+ *
+ * The value is opaque and never parsed. Key any store you keep it in by
+ * *origin*, not by the catalog URL: a catalog URL's path can itself be
+ * a secret.
+ */
+cb_status cb_catalog_set_authorization(struct cb_catalog *catalog, const char *value);
+
+/**
+ * Sign in with a username and password — the HTTP Basic flow, which is
+ * what an OPDS authentication document offers when it offers anything.
+ *
+ * The encoding is done here on purpose: base64 is a chore in C and a
+ * hazard in every language that has to guess whether the credential is
+ * UTF-8 first.
+ */
+cb_status cb_catalog_set_basic_auth(struct cb_catalog *catalog,
+                                    const char *username,
+                                    const char *password);
+
+/**
+ * Fetch what is at `url` and hold it — a catalog root, a section a
+ * navigation entry pointed at, a facet's narrowing, a page of a long
+ * feed. Whatever was held before is replaced.
+ *
+ * **Blocking.** Run it off the thread that draws.
+ *
+ * `CB_ERR_AUTH_REQUIRED` means the catalog wants credentials and said
+ * so properly; the authentication document is held for the
+ * `cb_catalog_auth_*` calls.
+ */
+cb_status cb_catalog_fetch(struct cb_catalog *catalog, const char *url);
+
+/**
+ * Search the catalog that is currently held. The results replace it,
+ * so browsing and searching are the same screen.
+ *
+ * `CB_ERR_UNAVAILABLE` when this catalog offers no search — worth
+ * asking before drawing a search box. Blocking, like the fetch.
+ */
+cb_status cb_catalog_search(struct cb_catalog *catalog, const char *query);
+
+/**
+ * The held feed's title — what a browse screen puts at the top.
+ */
+cb_status cb_catalog_feed_title(const struct cb_catalog *catalog,
+                                char *buf,
+                                size_t cap,
+                                size_t *needed);
+
+/**
+ * How many entries the held feed offers.
+ */
+cb_status cb_catalog_entry_count(const struct cb_catalog *catalog, size_t *count);
+
+/**
+ * One entry's plain data.
+ */
+cb_status cb_catalog_entry(const struct cb_catalog *catalog, size_t index, struct cb_entry *out);
+
+/**
+ * One of an entry's strings. `CB_ERR_UNAVAILABLE` where the entry
+ * carries none — which the flags on [`cb_catalog_entry`] predict for
+ * the ones a row draws.
+ */
+cb_status cb_catalog_entry_text(const struct cb_catalog *catalog,
+                                size_t index,
+                                enum cb_entry_field field,
+                                char *buf,
+                                size_t cap,
+                                size_t *needed);
+
+/**
+ * One of an entry's authors, by index into its `author_count`.
+ */
+cb_status cb_catalog_entry_author(const struct cb_catalog *catalog,
+                                  size_t index,
+                                  size_t author,
+                                  char *buf,
+                                  size_t cap,
+                                  size_t *needed);
+
+/**
+ * How many facets the held feed offers. Zero is ordinary.
+ */
+cb_status cb_catalog_facet_count(const struct cb_catalog *catalog, size_t *count);
+
+/**
+ * One facet's plain data.
+ */
+cb_status cb_catalog_facet(const struct cb_catalog *catalog, size_t index, struct cb_facet *out);
+
+/**
+ * One of a facet's strings.
+ */
+cb_status cb_catalog_facet_text(const struct cb_catalog *catalog,
+                                size_t index,
+                                enum cb_facet_field field,
+                                char *buf,
+                                size_t cap,
+                                size_t *needed);
+
+/**
+ * The URL of the next or previous page of a long feed, for the
+ * infinite scroll a phone browses with. `CB_ERR_UNAVAILABLE` at the
+ * end, which is how a host knows to stop asking.
+ */
+cb_status cb_catalog_page_href(const struct cb_catalog *catalog,
+                               enum cb_catalog_page direction,
+                               char *buf,
+                               size_t cap,
+                               size_t *needed);
+
+/**
+ * Whether this catalog offers a search — what decides if a search box
+ * is drawn at all.
+ */
+cb_status cb_catalog_has_search(const struct cb_catalog *catalog, bool *has);
+
+/**
+ * Put an entry on the shelf: fetch it, import it into the library at
+ * `library_dir`, record the sync services it advertises, and answer
+ * with the library row it became.
+ *
+ * **This is the call the whole module exists for.** A book's position
+ * and annotation services live in its catalog entry and nowhere else,
+ * so a host that downloaded by hand could store sync targets it had no
+ * way to learn — and a book added any other way is a book that will
+ * never reconcile. Everything else here is how a reader finds the entry
+ * to hand to this.
+ *
+ * **Blocking, and the slowest call in this ABI**: it is a whole book
+ * over the network. Run it off the thread that draws, and give
+ * [`cb_catalog_open`] a download callback if the platform has a
+ * facility that survives suspension.
+ *
+ * `CB_ERR_UNAVAILABLE` for an entry with nothing to acquire — a
+ * navigation row, or a purchase-only entry whose
+ * [`cb_catalog_entry_href`](cb_catalog_entry_text) belongs in a
+ * browser. The staging file is removed whatever happens; the library
+ * keeps its own copy.
+ */
+cb_status cb_catalog_download(struct cb_catalog *catalog,
+                              size_t index,
+                              const char *library_dir,
+                              int64_t *book_id);
+
+/**
+ * The title of the authentication document from the last
+ * `CB_ERR_AUTH_REQUIRED` — the catalog's own name for itself, which
+ * belongs at the top of a login sheet.
+ * `CB_ERR_UNAVAILABLE` when no fetch has been refused.
+ */
+cb_status cb_catalog_auth_title(const struct cb_catalog *catalog,
+                                char *buf,
+                                size_t cap,
+                                size_t *needed);
+
+/**
+ * Whether the refused catalog offers the username-and-password flow —
+ * the one [`cb_catalog_set_basic_auth`] speaks, and the only one OPDS
+ * defines that a reader can complete without a browser.
+ *
+ * False means the catalog wants something else (OAuth, SAML); a host
+ * should say so plainly rather than showing a login that cannot work.
+ */
+cb_status cb_catalog_auth_offers_basic(const struct cb_catalog *catalog, bool *offers);
 
 /**
  * The host's installed fonts, its idea of the generics, its fallback list.

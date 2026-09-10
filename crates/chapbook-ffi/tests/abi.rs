@@ -2551,3 +2551,191 @@ fn a_host_can_reach_a_place_it_names() {
 
     unsafe { cb_session_close(session) };
 }
+
+/// The catalog flow a phone runs, in C shapes: point at a URL, read what
+/// is there, drill into a section, and put a book on the shelf with its
+/// sync services recorded.
+///
+/// Skipped unless `CHAPBOOK_TEST_OPDS` names a running catalog, because
+/// a test suite that needs a server is a test suite that fails on a
+/// laptop in a tunnel. `mocklib` is what this was written against.
+#[test]
+fn a_catalog_can_be_browsed_and_a_book_taken_from_it() {
+    let Ok(root) = std::env::var("CHAPBOOK_TEST_OPDS") else {
+        eprintln!("skipped: set CHAPBOOK_TEST_OPDS to a catalog URL to run this");
+        return;
+    };
+    if cb_capabilities() & cb_capability::CB_CAP_OPDS as u32 == 0 {
+        eprintln!("skipped: this build has no OPDS");
+        return;
+    }
+
+    let mut catalog: *mut cb_catalog = std::ptr::null_mut();
+    assert_eq!(
+        unsafe { cb_catalog_open(None, None, None, std::ptr::null_mut(), &mut catalog,) },
+        cb_status::CB_OK,
+        "{}",
+        last_error()
+    );
+    assert!(!catalog.is_null());
+
+    // The root is a navigation feed: sections, not books.
+    let url = cstr(&root);
+    assert_eq!(
+        unsafe { cb_catalog_fetch(catalog, url.as_ptr()) },
+        cb_status::CB_OK,
+        "{}",
+        last_error()
+    );
+    let title =
+        read_string(|buf, cap, needed| unsafe { cb_catalog_feed_title(catalog, buf, cap, needed) })
+            .expect("a feed has a title");
+    assert!(!title.trim().is_empty());
+
+    let mut count = 0usize;
+    assert_eq!(
+        unsafe { cb_catalog_entry_count(catalog, &mut count) },
+        cb_status::CB_OK
+    );
+    assert!(count > 0, "the root offers somewhere to go");
+
+    let mut row = cb_entry {
+        kind: cb_entry_kind::CB_ENTRY_NAVIGATION,
+        author_count: 0,
+        can_download: false,
+        is_open_access: false,
+        has_thumbnail: false,
+        has_cover: false,
+        has_summary: false,
+        has_series: false,
+        series_position: 0.0,
+        has_series_position: false,
+        syncs_position: false,
+        syncs_annotations: false,
+    };
+    assert_eq!(
+        unsafe { cb_catalog_entry(catalog, 0, &mut row) },
+        cb_status::CB_OK
+    );
+    assert_eq!(
+        row.kind,
+        cb_entry_kind::CB_ENTRY_NAVIGATION,
+        "a root's rows are places to go, not books"
+    );
+
+    // Drill in: the href of a navigation row is the next fetch.
+    let section = read_string(|buf, cap, needed| unsafe {
+        cb_catalog_entry_text(catalog, 0, cb_entry_field::CB_ENTRY_HREF, buf, cap, needed)
+    })
+    .expect("a navigation row points somewhere");
+    let section_c = cstr(&section);
+    assert_eq!(
+        unsafe { cb_catalog_fetch(catalog, section_c.as_ptr()) },
+        cb_status::CB_OK,
+        "{}",
+        last_error()
+    );
+
+    // Find a row that is actually a book.
+    assert_eq!(
+        unsafe { cb_catalog_entry_count(catalog, &mut count) },
+        cb_status::CB_OK
+    );
+    let mut book_row = None;
+    for index in 0..count {
+        unsafe { cb_catalog_entry(catalog, index, &mut row) };
+        if row.can_download {
+            book_row = Some(index);
+            break;
+        }
+    }
+    let Some(index) = book_row else {
+        panic!("a publication feed with nothing to download");
+    };
+
+    // A book row carries what a list draws.
+    let title = read_string(|buf, cap, needed| unsafe {
+        cb_catalog_entry_text(
+            catalog,
+            index,
+            cb_entry_field::CB_ENTRY_TITLE,
+            buf,
+            cap,
+            needed,
+        )
+    })
+    .expect("a book has a title");
+    assert!(!title.trim().is_empty());
+    unsafe { cb_catalog_entry(catalog, index, &mut row) };
+    if row.author_count > 0 {
+        let author = read_string(|buf, cap, needed| unsafe {
+            cb_catalog_entry_author(catalog, index, 0, buf, cap, needed)
+        })
+        .expect("an author reads back");
+        assert!(!author.trim().is_empty());
+    }
+    if row.has_thumbnail {
+        let thumb = read_string(|buf, cap, needed| unsafe {
+            cb_catalog_entry_text(
+                catalog,
+                index,
+                cb_entry_field::CB_ENTRY_THUMBNAIL_URL,
+                buf,
+                cap,
+                needed,
+            )
+        })
+        .expect("a thumbnail is a URL");
+        assert!(
+            thumb.starts_with("http"),
+            "images cross as absolute URLs: {thumb}"
+        );
+    }
+
+    // The money call: onto the shelf, with its services recorded.
+    if cb_capabilities() & cb_capability::CB_CAP_LIBRARY as u32 != 0 {
+        let dir = library_dir("catalog-download");
+        let dir_c = cstr(&dir.to_string_lossy());
+        let mut book_id = 0i64;
+        assert_eq!(
+            unsafe { cb_catalog_download(catalog, index, dir_c.as_ptr(), &mut book_id) },
+            cb_status::CB_OK,
+            "{}",
+            last_error()
+        );
+        assert!(book_id > 0, "the download answers with its library row");
+
+        // It is on the shelf, and it knows where it syncs — the gap this
+        // whole module exists to close.
+        let mut lib: *mut cb_library = std::ptr::null_mut();
+        assert_eq!(
+            unsafe { cb_library_open(dir_c.as_ptr(), &mut lib) },
+            cb_status::CB_OK
+        );
+        let shelved = shelf(lib, &zeroed_query());
+        let mut rows = 0usize;
+        unsafe { cb_shelf_len(shelved, &mut rows) };
+        assert_eq!(rows, 1, "one book, once");
+        unsafe { cb_shelf_free(shelved) };
+        if row.syncs_annotations {
+            let mut needed = 0usize;
+            assert_eq!(
+                unsafe {
+                    cb_library_sync_annotation_container(
+                        lib,
+                        book_id,
+                        std::ptr::null_mut(),
+                        0,
+                        &mut needed,
+                    )
+                },
+                cb_status::CB_ERR_BUFFER_TOO_SMALL,
+                "an entry that advertises a container had it recorded"
+            );
+        }
+        unsafe { cb_library_close(lib) };
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    unsafe { cb_catalog_close(catalog) };
+}
