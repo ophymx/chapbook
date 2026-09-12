@@ -5,7 +5,7 @@ app that exercises the flow real readers live or die on.
 
 | | |
 |---|---|
-| `Chapbook/` | The Swift package: `Session`, sources, input, rendering, sync, custody helpers |
+| `Chapbook/` | The Swift package: `Session`, sources, input, rendering, the shelf, catalogs, sync, custody helpers |
 | `demo/` | A hand-rolled `.app`: picker once, bookmark stored, cold resolve forever after |
 | `build-xcframework.sh` | Rust staticlibs → `Chapbook.xcframework` (device, simulator, macOS slices) |
 | `typecheck-slices.sh` | The iOS slices compiled — the half `swift test` cannot run |
@@ -101,24 +101,47 @@ into the library by a fingerprint of its bytes, so position, annotations
 and per-book settings persist with no path ever crossing. The app's half
 of custody is holding the bookmark that reaches the file again.
 
+`Catalog` is where a phone's books come from: `fetch(_:)` a root,
+`entries()` to draw the rows, a navigation row's `href` to drill in,
+`facets()` and the page URLs for a long feed's chrome, `search(_:)`
+where `hasSearch()` says there is one — and `download(_:into:)`, which
+is the call the class exists for. It fetches the acquisition, imports it
+into the library at the directory the sessions use, **records the sync
+services the entry advertises**, and answers with the `Library.Book`
+row it became. Those services live in the catalog entry and nowhere
+else, so a book added any other way is one that will never reconcile.
+Every call that touches the network blocks; run them off the main actor
+in a `Task` whose cancellation is the app's own, because the binding
+invents no worker of its own. A 401 is an answer, not a failure: the
+fetch throws a `ChapbookError` whose `isAuthRequired` is true and keeps
+the authentication document, `authTitle()` and `authOffersBasic()` are
+what a login sheet draws, `signIn(username:password:)` is what it
+submits, and the fetch is simply tried again. Images cross as URLs,
+never bytes — a cover grid is what the platform's image loader is for,
+sending the same `Authorization` if the catalog wants one.
+
 `SyncWorker` reconciles the shelf with a book's services — the position
 with its OPDS Progression endpoint, marks with its Web Annotation
-container — recorded per book with `Library.setSyncTargets` off the
-catalog entry it was downloaded from. The transport is the same choice a
-`SessionConfiguration` makes, with the same default (`URLSession` on
-iOS, so requests honor ATS, the trust store and the app's own
-configuration), plus the write half sync turns on: PUT, POST and DELETE
-go out through the same session, and every response's headers cross —
-`ETag` and `Location` are the annotation flows' whole concurrency story.
-No credential crosses the boundary; a service behind auth wants a
-`URLSession` configured to attach its own. Reports come back typed
-through `drainReports()`, one per book and then `.finished`; the worker
-owns a thread, and letting the last reference go joins it.
+container — recorded per book by `Catalog.download`, or by
+`Library.setSyncTargets` for a book that arrived some other way. The
+transport is the same choice a `SessionConfiguration` makes, with the
+same default (`URLSession` on iOS, so requests honor ATS, the trust
+store and the app's own configuration), plus the write half sync turns
+on: PUT, POST and DELETE go out through the same session, and every
+response's headers cross — `ETag` and `Location` are the annotation
+flows' whole concurrency story. No credential crosses the boundary; a
+service behind auth wants a `URLSession` configured to attach its own.
+Reports come back typed through `drainReports()`, one per book and then
+`.finished`; the worker owns a thread, and letting the last reference go
+joins it.
 
 The rest of the reader's interactive surface is wrapped in the shapes
-Swift expects, and the package now covers every entry point in
-`chapbook.h` except `cb_font_source_android_system`, which resolves to
-nothing off Android:
+Swift expects, and the package covers every entry point in `chapbook.h`
+except `cb_font_source_android_system`, which resolves to nothing off
+Android. That claim has been false before — the catalog landed on the
+header an hour after it was first written, with a Kotlin binding and no
+Swift one — so hold a header change to it: a new `cb_` export is a Swift
+change in the same commit, or the sentence comes out.
 
 - **Getting somewhere** — `tableOfContents()` returns entries carrying
   their nesting and their index, `go(to:)` takes a `TOCEntry`, a
