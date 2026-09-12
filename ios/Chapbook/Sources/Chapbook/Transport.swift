@@ -188,7 +188,8 @@ private func report(_ outcome: URLSessionTransport.Fetched, into response: Opaqu
 
 // The C entry points. Plain functions, not closures, so they carry no
 // context — everything they need rides in `user`. Internal rather than
-// private because `cb_sync_open` takes the same `get` and `finalize`.
+// private because `cb_sync_open` takes the same `get` and `finalize`,
+// and `cb_catalog_open` those plus `download`.
 
 func transportGet(
     request: UnsafePointer<cb_http_request>?,
@@ -230,7 +231,7 @@ func transportSend(
     report(transport.perform(built), into: response)
 }
 
-private func transportDownload(
+func transportDownload(
     request: UnsafePointer<cb_http_request>?,
     dest: UnsafePointer<CChar>?,
     response: OpaquePointer?,

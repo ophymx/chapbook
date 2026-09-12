@@ -17,6 +17,13 @@ public struct ChapbookError: Error, CustomStringConvertible, Sendable {
         status.map { "chapbook error \($0): \(message)" } ?? "chapbook error: \(message)"
     }
 
+    /// The catalog wants credentials and said so with an authentication
+    /// document — `CB_ERR_AUTH_REQUIRED`. A response, not a failure: read
+    /// `Catalog.authTitle()` and `Catalog.authOffersBasic()`, put up a
+    /// login, `signIn`, and fetch again. The one status a catalog screen
+    /// has to match on, so it has a name.
+    public var isAuthRequired: Bool { status == C.authRequired }
+
     /// The failure a status-returning call just reported.
     static func last(_ status: Int32) -> ChapbookError {
         ChapbookError(status: status, message: lastErrorMessage())
@@ -37,6 +44,7 @@ enum C {
     static let ok = Int32(CB_OK.rawValue)
     static let bufferTooSmall = Int32(CB_ERR_BUFFER_TOO_SMALL.rawValue)
     static let unavailable = Int32(CB_ERR_UNAVAILABLE.rawValue)
+    static let authRequired = Int32(CB_ERR_AUTH_REQUIRED.rawValue)
 
     static let actionNone = UInt32(CB_ACTION_NONE.rawValue)
     static let formatGuess = UInt32(CB_FORMAT_GUESS.rawValue)

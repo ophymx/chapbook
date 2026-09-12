@@ -94,7 +94,7 @@ public final class Session {
     public func position() throws -> Position {
         var raw = cb_position(spine: 0, page: 0)
         try check(cb_session_position(self.raw, &raw))
-        return Position(spine: Int(raw.spine), page: Int(raw.page))
+        return Position(spine: raw.spine, page: raw.page)
     }
 
     public func readingDirection() throws -> ReadingDirection {
