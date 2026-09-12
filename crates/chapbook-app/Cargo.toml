@@ -10,9 +10,6 @@ authors.workspace = true
 
 [dependencies]
 chapbook-core = { workspace = true }
-chapbook-epub = { workspace = true }
-chapbook-cbz = { workspace = true }
-chapbook-pdf = { workspace = true }
 chapbook-library = { workspace = true }
 chapbook-sync = { workspace = true, features = ["ureq"] }
 chapbook-opds = { workspace = true, features = ["ureq"] }

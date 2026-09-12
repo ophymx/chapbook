@@ -523,12 +523,9 @@ dependencies = [
 name = "chapbook-app"
 version = "0.1.0"
 dependencies = [
- "chapbook-cbz",
  "chapbook-core",
- "chapbook-epub",
  "chapbook-library",
  "chapbook-opds",
- "chapbook-pdf",
  "chapbook-reader",
  "chapbook-sync",
 ]
@@ -557,14 +554,12 @@ dependencies = [
 name = "chapbook-cli"
 version = "0.1.0"
 dependencies = [
- "chapbook-cbz",
  "chapbook-core",
  "chapbook-epub",
  "chapbook-layout",
  "chapbook-library",
  "chapbook-opds",
  "chapbook-paint",
- "chapbook-pdf",
  "chapbook-reader",
  "chapbook-render-tinyskia",
  "chapbook-sync",

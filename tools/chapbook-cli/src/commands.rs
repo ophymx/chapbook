@@ -3,9 +3,10 @@
 
 use std::path::Path;
 
-use chapbook_core::{PageMetrics, Publication, ReadingSettings, Result, TocEntry};
+use chapbook_core::{BookKind, PageMetrics, Publication, ReadingSettings, Result, TocEntry};
 use chapbook_epub::Book;
 use chapbook_layout::{cascade, dom};
+use chapbook_reader::open_publication;
 
 /// The fixture corpus's fonts: vendored faces only, never host fonts, so
 /// every stage this CLI dumps is byte-identical on any machine.
@@ -42,38 +43,15 @@ fn fixture_fonts() -> chapbook_core::FontSource {
     source
 }
 
-/// Open a local book by extension: `.cbz`/`.pdf` -> image-per-page
-/// producers, else EPUB.
-fn open_publication(path: &Path) -> Result<Box<dyn chapbook_core::Publication>> {
-    match path
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(|e| e.to_ascii_lowercase())
-        .as_deref()
-    {
-        Some("cbz") => Ok(Box::new(chapbook_cbz::ComicBook::open(path)?)),
-        Some("pdf") => Ok(Box::new(chapbook_pdf::PdfBook::open(path)?)),
-        _ => Ok(Box::new(Book::open(path)?)),
-    }
-}
-
-fn is_image_book(path: &Path) -> bool {
-    path.extension()
-        .and_then(|e| e.to_str())
-        .is_some_and(|e| e.eq_ignore_ascii_case("cbz") || e.eq_ignore_ascii_case("pdf"))
-}
-
 pub fn meta(book_path: &Path) -> Result<String> {
+    let book = open_publication(book_path)?;
     // EPUBs report their fixed-layout status; the trait surface doesn't
     // carry it (comics are inherently fixed pages).
-    let layout_note = if is_image_book(book_path) {
-        "pages (image book)"
-    } else if Book::open(book_path)?.is_fixed_layout() {
-        "fixed (unsupported)"
-    } else {
-        "reflowable"
+    let layout_note = match book.kind() {
+        BookKind::Epub if Book::open(book_path)?.is_fixed_layout() => "fixed (unsupported)",
+        BookKind::Epub => "reflowable",
+        _ => "pages (image book)",
     };
-    let book = open_publication(book_path)?;
     let md = book.metadata();
     let mut out = String::new();
     push_field(&mut out, "title", md.title.as_deref());
@@ -216,9 +194,11 @@ pub fn render(
     out: &Path,
     theme: chapbook_core::Theme,
 ) -> Result<String> {
-    if is_image_book(epub) {
-        return render_image_book(epub, spine, out, theme);
+    let publication = open_publication(epub)?;
+    if !matches!(publication.kind(), BookKind::Epub) {
+        return render_image_book(publication.as_ref(), spine, out, theme);
     }
+    drop(publication);
     let book = Book::open(epub)?;
     let href = book.spine_item(spine)?.href.clone();
     let settings = ReadingSettings {
@@ -789,12 +769,11 @@ pub fn cfi(
 /// Render one image-book page (CBZ or PDF): decode the image,
 /// scale-to-fit page model, no dom/stylo/shaping anywhere in the path.
 fn render_image_book(
-    path: &Path,
+    book: &dyn Publication,
     spine: usize,
     out: &Path,
     theme: chapbook_core::Theme,
 ) -> Result<String> {
-    let book = open_publication(path)?;
     let bytes = book.unit_bytes(spine)?;
     let decoded = image::load_from_memory(&bytes)
         .map_err(|e| chapbook_core::ChapbookError::BookMalformed(format!("page image: {e}")))?
