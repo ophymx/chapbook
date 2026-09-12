@@ -23,9 +23,9 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use chapbook_core::{ChapbookError, CredentialStore, FontSource, Publication, Result};
+use chapbook_core::{ChapbookError, CredentialStore, FontSource, Result};
 use chapbook_library::{BookId, BookQuery, BookRecord, Library, ReadingState, Sort};
-use chapbook_reader::{Session, SessionConfig};
+use chapbook_reader::{open_publication, Session, SessionConfig};
 use chapbook_sync::SyncEngine;
 
 pub use chapbook_library;
@@ -303,21 +303,5 @@ pub fn describe_state(book: &BookRecord) -> String {
         // may be the beginning again — not shown beside a word it would
         // contradict.
         ReadingState::Finished => "finished".to_string(),
-    }
-}
-
-/// Open a local book by extension: `.cbz`/`.pdf` are image-per-page
-/// producers, everything else is EPUB. Import needs a `Publication` for
-/// its metadata; a reading session sniffs bytes for itself.
-fn open_publication(path: &Path) -> Result<Box<dyn Publication>> {
-    match path
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(|e| e.to_ascii_lowercase())
-        .as_deref()
-    {
-        Some("cbz") => Ok(Box::new(chapbook_cbz::ComicBook::open(path)?)),
-        Some("pdf") => Ok(Box::new(chapbook_pdf::PdfBook::open(path)?)),
-        _ => Ok(Box::new(chapbook_epub::Book::open(path)?)),
     }
 }

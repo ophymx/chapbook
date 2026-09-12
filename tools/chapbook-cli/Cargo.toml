@@ -25,8 +25,10 @@ fbdev = ["mezzotint/fbdev"]
 [dependencies]
 chapbook-core = { workspace = true }
 chapbook-epub = { workspace = true }
-chapbook-cbz = { workspace = true }
-chapbook-pdf = { workspace = true }
+# The binary uses only `open_publication` — the byte-sniffing open every
+# format-agnostic caller shares — and still works a stage at a time with
+# no session. The `show` example drives a whole session onto a panel.
+chapbook-reader = { workspace = true, features = ["cbz", "pdf", "svg", "mathml"] }
 image = { workspace = true }
 chapbook-layout = { workspace = true, features = ["svg", "mathml"] }
 chapbook-paint = { workspace = true }
@@ -42,9 +44,6 @@ cosmic-text = { workspace = true }
 
 [dev-dependencies]
 insta = { workspace = true }
-# For `show`, which drives a whole reading session onto a panel. The
-# binary itself works a stage at a time and needs no session.
-chapbook-reader = { workspace = true, features = ["cbz", "pdf", "svg", "mathml"] }
 
 # The chapbook half of the panel seam: mezzotint's own examples cover a
 # panel with no book behind it, and this one covers the pairing.
