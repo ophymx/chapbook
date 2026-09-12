@@ -11,7 +11,7 @@ namespace Chapbook;
 /// on the very first turn. Use the <c>moved</c> answer the navigation calls
 /// return, which is why they return one.
 /// </remarks>
-public readonly record struct Position(uint Spine, uint Page);
+public readonly record struct Position(int Spine, int Page);
 
 /// <summary>How big a page is, in the units text flows in.</summary>
 /// <param name="Width">Logical pixels, margins included.</param>
@@ -247,7 +247,7 @@ public sealed partial class Session : IDisposable
         {
             ChapbookException.Check(
                 Interop.cb_session_position(Live(), out NativePosition p), nameof(Position));
-            return new Position(p.Spine, p.Page);
+            return new Position((int)p.Spine, (int)p.Page);
         }
     }
 

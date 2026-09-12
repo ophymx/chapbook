@@ -31,8 +31,8 @@ internal struct NativeMetrics
 [StructLayout(LayoutKind.Sequential)]
 internal struct NativePosition
 {
-    public uint Spine;
-    public uint Page;
+    public nuint Spine;
+    public nuint Page;
 }
 
 [StructLayout(LayoutKind.Sequential)]

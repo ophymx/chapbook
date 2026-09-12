@@ -112,8 +112,8 @@ pub enum cb_book_kind {
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct cb_position {
-    pub spine: u32,
-    pub page: u32,
+    pub spine: usize,
+    pub page: usize,
 }
 
 /// The page box, in logical units, plus the scale that turns it into
@@ -555,8 +555,8 @@ pub unsafe extern "C" fn cb_session_position(
         out!(
             position,
             cb_position {
-                spine: at.spine as u32,
-                page: at.page as u32,
+                spine: at.spine,
+                page: at.page,
             },
             "position"
         );
