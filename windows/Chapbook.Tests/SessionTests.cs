@@ -182,7 +182,7 @@ public class SessionTests
         // this answer exists to prevent.
         int turns = 1;
         bool crossed = false;
-        uint spine = session.Position.Spine;
+        int spine = session.Position.Spine;
         while (session.NextPage())
         {
             turns++;
@@ -308,8 +308,8 @@ public class SessionTests
     public void APositionSurvivesAClose()
     {
         string library = Fixture.Scratch();
-        uint spine;
-        uint page;
+        int spine;
+        int page;
         using (var session = Session.OpenPath(Fixture.Book("long.epub"), Fixture.Config(library)))
         {
             session.SetMetrics(Fixture.Metrics);
@@ -500,8 +500,8 @@ public class SessionEventTests
         // Coalesced on the engine's side: two moves, one report. A host
         // that drains rarely still learns where the reader ended up, which
         // is why this is a queue and not a callback per turn.
-        Assert.Equal(session.Position.Spine, (uint)moved.Spine);
-        Assert.Equal(session.Position.Page, (uint)moved.Page);
+        Assert.Equal(session.Position.Spine, moved.Spine);
+        Assert.Equal(session.Position.Page, moved.Page);
     }
 
     [Fact]

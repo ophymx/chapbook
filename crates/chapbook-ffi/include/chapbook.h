@@ -1202,8 +1202,8 @@ typedef struct cb_metrics {
  * bug the conformance harness exists to catch.
  */
 typedef struct cb_position {
-    uint32_t spine;
-    uint32_t page;
+    size_t spine;
+    size_t page;
 } cb_position;
 
 /**

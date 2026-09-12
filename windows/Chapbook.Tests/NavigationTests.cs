@@ -28,7 +28,7 @@ public class NavigationTests
         if (last.Spine is { } spine)
         {
             Assert.True(moved, "an entry that points somewhere moves the reader");
-            Assert.Equal((uint)spine, session.Position.Spine);
+            Assert.Equal(spine, session.Position.Spine);
         }
 
         // An entry from a re-read that is no longer there is refused by

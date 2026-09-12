@@ -2425,10 +2425,7 @@ fn a_host_can_reach_a_place_it_names() {
         assert!(moved, "an entry that points somewhere moves the reader");
         let mut at = cb_position { spine: 0, page: 0 };
         unsafe { cb_session_position(session, &mut at) };
-        // `cb_position` carries a `uint32_t` spine while the newer
-        // structs carry `size_t`; the cast is that split, not a
-        // conversion the value needs.
-        assert_eq!(at.spine as usize, last.spine, "landed in the entry's unit");
+        assert_eq!(at.spine, last.spine, "landed in the entry's unit");
     }
 
     // ---- The locator, and going back to one ----
