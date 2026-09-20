@@ -177,6 +177,62 @@ typedef enum cb_entry_field {
      * browser rather than downloading.
      */
     CB_ENTRY_HREF = 7,
+    /**
+     * The entry's OPDS id, opaque — comic-server ids contain slashes
+     * and dots. A stable key for a host's own record of a download it
+     * enqueued; never normalize it, and never build a path out of it.
+     */
+    CB_ENTRY_ID = 8,
+    /**
+     * The acquisition to fetch, for a host performing the download
+     * itself. Unlike [`CB_ENTRY_HREF`](cb_entry_field::CB_ENTRY_HREF)
+     * this never falls back to another kind of link, so a navigation
+     * row answers `CB_ERR_UNAVAILABLE` rather than handing back a feed
+     * URL that would download as a book.
+     *
+     * Send it with `Accept` set to the wildcard media range — type
+     * `*`, subtype `*` — and nothing else of the engine's. The header
+     * list is not crossed here because there is exactly one and it is
+     * constant. (Spelled out rather than written literally: the
+     * two-character form would close this comment in the generated C
+     * header, which `tests/header.rs` compiles.)
+     */
+    CB_ENTRY_DOWNLOAD_URL = 9,
+    /**
+     * A filename for the user's benefit: one safe path component, with
+     * no separators or control characters, and an extension guessed
+     * from the advertised type.
+     *
+     * Advice, not instruction. It is not unique, it means nothing to
+     * the engine — format is decided by sniffing bytes — and a host
+     * should validate it against its own filesystem's rules. Renaming
+     * the file is expected and costs nothing.
+     */
+    CB_ENTRY_DOWNLOAD_FILENAME = 10,
+    /**
+     * The acquisition link's advertised type, verbatim. A hint for the
+     * host's own UI; do not trust it to decide how to read the file.
+     */
+    CB_ENTRY_DOWNLOAD_MEDIA_TYPE = 11,
+    /**
+     * The position-sync service this entry advertises, absolute.
+     *
+     * **Read it before the download, not after.** It lives in the
+     * catalog entry and nowhere else, so a host whose transfer outlives
+     * the feed must persist it alongside the job and hand it to
+     * [`cb_library_set_sync_targets`](crate::cb_library_set_sync_targets)
+     * once the file lands. `CB_ERR_UNAVAILABLE` where the entry
+     * advertises none — and in a build without sync, which reports no
+     * targets exactly as the row flags do.
+     */
+    CB_ENTRY_PROGRESSION_URL = 12,
+    /**
+     * The Web Annotation container this entry advertises, absolute.
+     * Everything said of
+     * [`CB_ENTRY_PROGRESSION_URL`](cb_entry_field::CB_ENTRY_PROGRESSION_URL)
+     * applies.
+     */
+    CB_ENTRY_ANNOTATION_CONTAINER = 13,
 } cb_entry_field;
 
 /**
@@ -1677,9 +1733,21 @@ cb_status cb_catalog_has_search(const struct cb_catalog *catalog, bool *has);
  * to hand to this.
  *
  * **Blocking, and the slowest call in this ABI**: it is a whole book
- * over the network. Run it off the thread that draws, and give
- * [`cb_catalog_open`] a download callback if the platform has a
- * facility that survives suspension.
+ * over the network. Run it off the thread that draws — and if the
+ * transfer has to survive the app being suspended, do not use this call
+ * at all. No callback rescues it: every callback in this ABI blocks
+ * until the transfer settles, which is the one thing a background
+ * transfer does not do.
+ *
+ * For that, take the same job apart and own it. Read
+ * [`CB_ENTRY_DOWNLOAD_URL`](cb_entry_field::CB_ENTRY_DOWNLOAD_URL) and
+ * the two sync-service fields beside it, fetch with `WorkManager` or a
+ * background `URLSession`, then call
+ * [`cb_library_import_file`](crate::cb_library_import_file) and
+ * [`cb_library_set_sync_targets`](crate::cb_library_set_sync_targets)
+ * when the file lands. This call is exactly those pieces run back to
+ * back on one thread, which is why the sync services have to be read
+ * *before* a transfer that will outlive the feed.
  *
  * `CB_ERR_UNAVAILABLE` for an entry with nothing to acquire — a
  * navigation row, or a purchase-only entry whose
@@ -2160,6 +2228,36 @@ cb_status cb_library_delete_book(struct cb_library *library, int64_t book);
  * keeps the first timestamp.
  */
 cb_status cb_library_set_finished(struct cb_library *library, int64_t book, bool finished);
+
+/**
+ * Put a file on the shelf, answering with the library row it became.
+ *
+ * The format is decided by sniffing the bytes, so the name and
+ * extension do not matter — which is what lets a host hand over
+ * whatever its platform produced: a `content://` copy, a
+ * `URLSession` temp file under a UUID, a file the reader picked out of
+ * a document browser.
+ *
+ * **The file is not consumed.** The library copies what it imports, and
+ * this never deletes or moves the source: it belongs to whoever passed
+ * it. Compare [`cb_catalog_download`](crate::cb_catalog_download),
+ * which removes the staging file it made itself.
+ *
+ * **Importing the same bytes twice is not an error.** Books are
+ * identified by content fingerprint, so a second import answers with
+ * the row the first one made rather than shelving a duplicate. That
+ * matters for a background transfer: a job system that retries, or one
+ * whose completion is delivered twice, does not need to coordinate with
+ * this call to stay correct.
+ *
+ * This shelves the file and nothing else. A book downloaded from a
+ * catalog also has sync services to record, and those live in the
+ * catalog entry rather than in the file — read them with
+ * [`CB_ENTRY_PROGRESSION_URL`](crate::cb_entry_field::CB_ENTRY_PROGRESSION_URL)
+ * and its neighbour before the transfer starts, then hand them to
+ * [`cb_library_set_sync_targets`] once this has returned an id.
+ */
+cb_status cb_library_import_file(struct cb_library *library, const char *path, int64_t *book_id);
 
 /**
  * Record where a book syncs: its OPDS Progression endpoint and its Web

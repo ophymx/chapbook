@@ -45,6 +45,27 @@ fn complete_entry() -> Vec<u8> {
     .into_bytes()
 }
 
+/// A publication feed carrying one acquisition and both sync services —
+/// the shape a host takes apart when it means to run the transfer itself.
+///
+/// The service hrefs are deliberately root-relative, which is what real
+/// catalogs serve, so reading them back proves they resolve rather than
+/// reaching the library as paths.
+fn shelf_feed() -> Vec<u8> {
+    format!(
+        r#"<?xml version="1.0"?>
+<feed xmlns="http://www.w3.org/2005/Atom" xmlns:oa="http://www.w3.org/ns/oa#">
+  <id>urn:cat:books</id><title>Books</title>
+  <entry><id>urn:book/1: odd</id><title>Dune: Part One</title>
+    <link rel="http://opds-spec.org/acquisition" href="{HOST}/get/1" type="application/epub+zip"/>
+    <link rel="http://opds-spec.org/progression" href="/progression/1"/>
+    <link rel="http://www.w3.org/ns/oa#annotationService" href="/marks/1"/>
+  </entry>
+</feed>"#
+    )
+    .into_bytes()
+}
+
 /// What the test observes from outside: requests that crossed the seam,
 /// and whether the host's context was released.
 #[derive(Default)]
@@ -87,6 +108,12 @@ unsafe extern "C" fn serve(
             200,
             "application/atom+xml;profile=opds-catalog",
             lazy_feed(),
+        )
+    } else if path.starts_with("/shelf") {
+        (
+            200,
+            "application/atom+xml;profile=opds-catalog",
+            shelf_feed(),
         )
     } else if path.starts_with("/entry") {
         (200, "application/atom+xml;type=entry", complete_entry())
@@ -217,6 +244,24 @@ fn config_with_transport(
         cb_status::CB_OK
     );
     config
+}
+
+/// A string accessor read the way the header says: probe for the size,
+/// then fill. `None` where the accessor declines, which for these fields
+/// is the ordinary answer rather than a fault.
+fn read_string(
+    mut call: impl FnMut(*mut c_char, usize, *mut usize) -> cb_status,
+) -> Option<String> {
+    let mut needed: usize = 0;
+    if call(std::ptr::null_mut(), 0, &mut needed) != cb_status::CB_ERR_BUFFER_TOO_SMALL {
+        return None;
+    }
+    let mut buf = vec![0u8; needed];
+    if call(buf.as_mut_ptr() as *mut c_char, buf.len(), &mut needed) != cb_status::CB_OK {
+        return None;
+    }
+    assert_eq!(buf.pop(), Some(0), "the callee NUL-terminates");
+    Some(String::from_utf8(buf).expect("UTF-8 out"))
 }
 
 fn last_error() -> String {
@@ -444,4 +489,148 @@ fn closing_a_session_waits_for_the_page_it_was_fetching() {
         1,
         "close returned while the loader still held the host's context"
     );
+}
+
+/// A download taken apart, so a host can run the transfer itself.
+///
+/// Everything a background job needs comes off the entry *before* the
+/// transfer starts, because by the time one lands the feed is usually
+/// gone: where to fetch from, what to call the file, and — the part that
+/// exists nowhere else — the two sync services the catalog advertises.
+#[test]
+fn an_entry_describes_a_download_the_host_will_run_itself() {
+    if cb_capabilities() & cb_capability::CB_CAP_OPDS as u32 == 0 {
+        eprintln!("skipped: this build has no OPDS");
+        return;
+    }
+    let observed = Arc::new(Observed::default());
+    let context = Box::new(HostContext {
+        observed: Arc::clone(&observed),
+    });
+    let mut catalog: *mut cb_catalog = std::ptr::null_mut();
+    assert_eq!(
+        unsafe {
+            cb_catalog_open(
+                Some(serve),
+                None,
+                Some(finalize),
+                Box::into_raw(context) as *mut c_void,
+                &mut catalog,
+            )
+        },
+        cb_status::CB_OK,
+        "{}",
+        last_error()
+    );
+
+    let url = cstr(&format!("{HOST}/shelf"));
+    assert_eq!(
+        unsafe { cb_catalog_fetch(catalog, url.as_ptr()) },
+        cb_status::CB_OK,
+        "{}",
+        last_error()
+    );
+
+    let field = |which| {
+        read_string(|buf, cap, needed| unsafe {
+            cb_catalog_entry_text(catalog, 0, which, buf, cap, needed)
+        })
+    };
+
+    assert_eq!(
+        field(cb_entry_field::CB_ENTRY_DOWNLOAD_URL).as_deref(),
+        Some(format!("{HOST}/get/1").as_str()),
+        "the acquisition, absolute"
+    );
+    assert_eq!(
+        field(cb_entry_field::CB_ENTRY_DOWNLOAD_MEDIA_TYPE).as_deref(),
+        Some("application/epub+zip")
+    );
+    // One safe path component: the colon and the space are gone, and the
+    // extension follows the advertised type. The host may still rename it.
+    assert_eq!(
+        field(cb_entry_field::CB_ENTRY_DOWNLOAD_FILENAME).as_deref(),
+        Some("Dune_Part_One.epub")
+    );
+    // Opaque, and this one holds both a slash and a colon — an id is a
+    // key, never a filename.
+    assert_eq!(
+        field(cb_entry_field::CB_ENTRY_ID).as_deref(),
+        Some("urn:book/1: odd")
+    );
+
+    // The services, resolved from the root-relative hrefs the feed served.
+    assert_eq!(
+        field(cb_entry_field::CB_ENTRY_PROGRESSION_URL).as_deref(),
+        Some(format!("{HOST}/progression/1").as_str()),
+        "a service href must not reach the library as a path"
+    );
+    assert_eq!(
+        field(cb_entry_field::CB_ENTRY_ANNOTATION_CONTAINER).as_deref(),
+        Some(format!("{HOST}/marks/1").as_str())
+    );
+
+    unsafe { cb_catalog_close(catalog) };
+    assert_eq!(
+        observed.finalized.load(Ordering::SeqCst),
+        1,
+        "the transport is released once"
+    );
+}
+
+/// A navigation row has nothing to fetch, and must not answer with the
+/// feed it points at — which `CB_ENTRY_HREF` deliberately does.
+#[test]
+fn a_row_with_nothing_to_acquire_offers_no_download() {
+    if cb_capabilities() & cb_capability::CB_CAP_OPDS as u32 == 0 {
+        eprintln!("skipped: this build has no OPDS");
+        return;
+    }
+    let observed = Arc::new(Observed::default());
+    let context = Box::new(HostContext {
+        observed: Arc::clone(&observed),
+    });
+    let mut catalog: *mut cb_catalog = std::ptr::null_mut();
+    assert_eq!(
+        unsafe {
+            cb_catalog_open(
+                Some(serve),
+                None,
+                Some(finalize),
+                Box::into_raw(context) as *mut c_void,
+                &mut catalog,
+            )
+        },
+        cb_status::CB_OK
+    );
+    let url = cstr(&format!("{HOST}/feed"));
+    assert_eq!(
+        unsafe { cb_catalog_fetch(catalog, url.as_ptr()) },
+        cb_status::CB_OK,
+        "{}",
+        last_error()
+    );
+
+    let mut needed = 0usize;
+    assert_eq!(
+        unsafe {
+            cb_catalog_entry_text(
+                catalog,
+                0,
+                cb_entry_field::CB_ENTRY_DOWNLOAD_URL,
+                std::ptr::null_mut(),
+                0,
+                &mut needed,
+            )
+        },
+        cb_status::CB_ERR_UNAVAILABLE,
+        "a section is not a book"
+    );
+    // The same row does point somewhere: that is what HREF is for.
+    assert!(read_string(|buf, cap, needed| unsafe {
+        cb_catalog_entry_text(catalog, 0, cb_entry_field::CB_ENTRY_HREF, buf, cap, needed)
+    })
+    .is_some());
+
+    unsafe { cb_catalog_close(catalog) };
 }

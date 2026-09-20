@@ -2736,3 +2736,127 @@ fn a_catalog_can_be_browsed_and_a_book_taken_from_it() {
 
     unsafe { cb_catalog_close(catalog) };
 }
+
+// ---- Importing a file the host fetched itself ----
+
+/// An empty library of this test's own, plus its directory.
+fn empty_library(name: &str) -> (*mut cb_library, PathBuf) {
+    let dir = library_dir(name);
+    let mut handle: *mut cb_library = std::ptr::null_mut();
+    let path = cstr(&dir.to_string_lossy());
+    assert_eq!(
+        unsafe { cb_library_open(path.as_ptr(), &mut handle) },
+        cb_status::CB_OK,
+        "{}",
+        last_error()
+    );
+    (handle, dir)
+}
+
+fn import(library: *mut cb_library, path: &std::path::Path) -> i64 {
+    let c = cstr(&path.to_string_lossy());
+    let mut book = 0i64;
+    assert_eq!(
+        unsafe { cb_library_import_file(library, c.as_ptr(), &mut book) },
+        cb_status::CB_OK,
+        "{}",
+        last_error()
+    );
+    book
+}
+
+/// The completion half of a download the host ran itself: hand over a
+/// file, get a shelf row.
+#[test]
+fn importing_a_file_shelves_it() {
+    let (library, _dir) = empty_library("import-shelves");
+    let source = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/epub/minimal.epub");
+
+    let book = import(library, &source);
+    assert!(book > 0, "a shelved book has a row");
+
+    let shelf = shelf(library, &zeroed_query());
+    assert_eq!(shelf_len(shelf), 1);
+    unsafe { cb_shelf_free(shelf) };
+    unsafe { cb_library_close(library) };
+}
+
+/// The source belongs to whoever passed it. `cb_catalog_download` deletes
+/// the staging file it made itself; this must not, because here the file
+/// is the platform's — a `URLSession` temp file, a `content://` copy —
+/// and deleting it would be reaching into the host's storage.
+#[test]
+fn importing_a_file_leaves_the_source_alone() {
+    let (library, dir) = empty_library("import-keeps-source");
+    let source = dir.join("handed-over.epub");
+    std::fs::copy(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/epub/minimal.epub"),
+        &source,
+    )
+    .expect("stage a file");
+
+    import(library, &source);
+    assert!(source.exists(), "the host's file is still the host's");
+    unsafe { cb_library_close(library) };
+}
+
+/// Books are identified by content fingerprint, so importing the same
+/// bytes again answers with the row that already holds them.
+///
+/// This is what makes a background transfer safe to retry. `WorkManager`
+/// reruns a worker after a crash or a lost network, and a completion can
+/// be delivered twice; neither has to coordinate with the library to
+/// avoid shelving the same book over and over.
+#[test]
+fn importing_the_same_bytes_twice_answers_with_the_same_row() {
+    let (library, dir) = empty_library("import-idempotent");
+    let original =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/epub/minimal.epub");
+    // A different path and a different name: the fingerprint is of the
+    // bytes, and a retrying worker rarely lands them in the same place.
+    let retry = dir.join("second-attempt.epub");
+    std::fs::copy(&original, &retry).expect("stage a file");
+
+    let first = import(library, &original);
+    let again = import(library, &retry);
+    assert_eq!(first, again, "the same bytes are the same book");
+
+    let shelf = shelf(library, &zeroed_query());
+    assert_eq!(shelf_len(shelf), 1, "no duplicate row");
+    unsafe { cb_shelf_free(shelf) };
+    unsafe { cb_library_close(library) };
+}
+
+/// A book is its bytes, not its name — which is the whole reason a host
+/// may rename a download. `URLSession` lands bytes under a UUID and
+/// `DownloadManager` answers with a `content://` URI that has no
+/// extension at all.
+#[test]
+fn an_imported_file_is_read_by_its_bytes_not_its_name() {
+    let (library, dir) = empty_library("import-sniffs");
+    let nameless = dir.join("CFNetworkDownload_a8Kq2p");
+    std::fs::copy(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/epub/minimal.epub"),
+        &nameless,
+    )
+    .expect("stage a file");
+
+    let book = import(library, &nameless);
+    assert!(book > 0, "an extensionless download still shelves");
+    unsafe { cb_library_close(library) };
+}
+
+/// Nothing to import is an error the host can act on, not a panic.
+#[test]
+fn importing_something_that_is_not_a_book_fails() {
+    let (library, dir) = empty_library("import-rejects");
+    let junk = dir.join("truncated.epub");
+    std::fs::write(&junk, b"not a book").expect("stage a file");
+
+    let c = cstr(&junk.to_string_lossy());
+    let mut book = 0i64;
+    let status = unsafe { cb_library_import_file(library, c.as_ptr(), &mut book) };
+    assert_ne!(status, cb_status::CB_OK);
+    assert_ne!(status, cb_status::CB_ERR_PANIC);
+    unsafe { cb_library_close(library) };
+}

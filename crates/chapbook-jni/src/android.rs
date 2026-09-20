@@ -2191,6 +2191,47 @@ pub extern "system" fn Java_com_ophymx_chapbook_Native_syncClose(
     }
 }
 
+/// Put a file on the shelf, answering with the library row it became, or
+/// 0. The half of `catalogDownload` that is not networking.
+///
+/// **The call `WorkManager` needs.** A download that has to survive the
+/// app being suspended is the app's to run — `DownloadManager`, or a
+/// worker over OkHttp — and this is where the finished file comes back.
+/// The format is sniffed from the bytes, so whatever the platform named
+/// the file is fine.
+///
+/// The source is not consumed: the library copies what it imports and
+/// this never deletes it. Importing the same bytes twice answers with
+/// the same row rather than shelving a duplicate, which is what makes a
+/// retried worker safe.
+///
+/// Sync services are not in the file. Read them off the entry with
+/// `catalogEntryText` fields 12 and 13 *before* the transfer, persist
+/// them with the job, and pass them to `librarySetSyncTargets` once this
+/// has returned an id.
+#[no_mangle]
+pub extern "system" fn Java_com_ophymx_chapbook_Native_libraryImportFile(
+    mut env: JNIEnv,
+    _class: JClass,
+    handle: jlong,
+    path: JString,
+) -> jlong {
+    let (Some(library), Some(path)) = (unsafe { library(handle) }, string_in(&mut env, &path))
+    else {
+        return 0;
+    };
+    let path = std::path::Path::new(&path);
+    let imported = chapbook_reader::open_publication(path)
+        .and_then(|publication| library.import(path, publication.as_ref()));
+    match imported {
+        Ok(id) => id.0,
+        Err(e) => {
+            log::error!("import failed: {e}");
+            0
+        }
+    }
+}
+
 /// Record where a book syncs — the services off the catalog entry it was
 /// downloaded from. Null holds none; two nulls make it local again.
 #[no_mangle]
@@ -3120,8 +3161,20 @@ pub extern "system" fn Java_com_ophymx_chapbook_Native_catalogEntryCount(
 }
 
 /// One of an entry's strings, by field: 0 title, 1 summary, 2 publisher,
-/// 3 language, 4 series, 5 thumbnail URL, 6 cover URL, 7 href. Null
-/// where the entry carries none.
+/// 3 language, 4 series, 5 thumbnail URL, 6 cover URL, 7 href, 8 OPDS
+/// id, 9 download URL, 10 suggested filename, 11 advertised media type,
+/// 12 progression service, 13 annotation container. Null where the entry
+/// carries none.
+///
+/// The numbering is the C ABI's `cb_entry_field` and has to stay that
+/// way: the two bindings are read side by side, and a field that means
+/// different things in each is the kind of drift nothing catches. An
+/// unknown field answers null rather than falling through to a
+/// neighbour, so a binding built against a newer engine degrades instead
+/// of quietly returning the wrong string.
+///
+/// 9 through 13 are the download taken apart, for a transfer the host
+/// runs itself — see `catalogDownload`.
 #[no_mangle]
 pub extern "system" fn Java_com_ophymx_chapbook_Native_catalogEntryText(
     env: JNIEnv,
@@ -3142,11 +3195,31 @@ pub extern "system" fn Java_com_ophymx_chapbook_Native_catalogEntryText(
             4 => entry.series.as_ref().map(|s| s.name.clone()),
             5 => entry.thumbnail().map(|l| resolve_url(&base, &l.href)),
             6 => entry.cover().map(|l| resolve_url(&base, &l.href)),
-            _ => entry
+            7 => entry
                 .acquisitions()
                 .next()
                 .or_else(|| entry.links.first())
                 .map(|l| resolve_url(&base, &l.href)),
+            8 => Some(entry.id.clone()),
+            9 => entry
+                .download_request()
+                .map(|request| resolve_url(&base, &request.url)),
+            10 => entry
+                .download_request()
+                .map(|request| request.suggested_filename),
+            11 => entry
+                .download_request()
+                .and_then(|request| request.media_type),
+            // Resolved even though the parser already did it against the
+            // request URL: a no-op on an absolute href, and what stops a
+            // root-relative service path reaching the library as a path.
+            12 => chapbook_sync::targets_of(entry)
+                .0
+                .map(|href| resolve_url(&base, &href)),
+            13 => chapbook_sync::targets_of(entry)
+                .1
+                .map(|href| resolve_url(&base, &href)),
+            _ => None,
         }
     });
     match value {
@@ -3224,6 +3297,16 @@ pub extern "system" fn Java_com_ophymx_chapbook_Native_catalogHasSearch(
 /// catalog entry and nowhere else, so a book added any other way is one
 /// that will never reconcile. Blocking and slow; run it off the UI
 /// thread.
+///
+/// It is also the wrong call for a download that must survive the app
+/// being suspended, and no transport implementation changes that — the
+/// whole transfer happens inside this call, so the process has to stay
+/// alive for it. For that, take the job apart: read `catalogEntryText`
+/// fields 9 through 13, run the transfer under `WorkManager` or
+/// `DownloadManager`, then call `libraryImportFile` and
+/// `librarySetSyncTargets` when the file lands. This is exactly those
+/// pieces back to back, which is why the services have to be read before
+/// a transfer that will outlive the feed.
 #[no_mangle]
 pub extern "system" fn Java_com_ophymx_chapbook_Native_catalogDownload(
     mut env: JNIEnv,
