@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  An acquisition feed whose entry advertises both sync services, which no
+  other OPDS fixture here does. It exists for the download-request path:
+  the progression endpoint and the annotation container live in the
+  catalog entry and nowhere else, so a host whose transfer outlives the
+  feed has to read them before it starts — and that is only testable
+  against an entry that carries them.
+
+  The progression href is root-relative on purpose. Real catalogs serve
+  it that way, and an unresolved one would reach the library as a path
+  rather than a URL. The annotation container is absolute, so the same
+  test covers both sides of the resolve.
+
+  The title carries a separator and a colon so a suggested filename is
+  observably one safe path component rather than a path.
+-->
+<feed xmlns="http://www.w3.org/2005/Atom" xmlns:opds="http://opds-spec.org/2010/catalog" xmlns:dcterms="http://purl.org/dc/terms/">
+  <id>urn:cat:sync</id>
+  <title>Syncing Shelf</title>
+  <updated>2026-01-02T03:04:05Z</updated>
+  <author>
+    <name>Library Inc</name>
+  </author>
+  <link rel="self" href="/opds/feed/sync" type="application/atom+xml;profile=opds-catalog;kind=acquisition"></link>
+  <link rel="start" href="/opds/" type="application/atom+xml;profile=opds-catalog;kind=navigation"></link>
+  <entry>
+    <id>urn:example:sync/demo/v3</id>
+    <title>Vol. 3: Rain / Thunder</title>
+    <updated>2026-01-02T03:04:05Z</updated>
+    <author>
+      <name>Mangaka Example</name>
+    </author>
+    <dcterms:language>en</dcterms:language>
+    <summary type="text">The volume that reconciles.</summary>
+    <link rel="http://opds-spec.org/image/thumbnail" href="/covers/v3-t.jpg" type="image/jpeg"></link>
+    <link rel="http://opds-spec.org/acquisition/open-access" href="/dl/sync/v3.epub" type="application/epub+zip"></link>
+    <link rel="http://opds-spec.org/progression" href="/sync/position/v3" type="application/json"></link>
+    <link rel="http://www.w3.org/ns/oa#annotationService" href="http://catalog.test/sync/annotations/v3" type="application/ld+json"></link>
+  </entry>
+</feed>
