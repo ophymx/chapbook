@@ -47,8 +47,7 @@ public struct HTTPTransport: Sendable {
         let box = Unmanaged.passRetained(URLSessionTransport(session: session))
         try check(
             cb_config_set_http_transport(
-                config, transportGet, transportDownload, transportFinalize,
-                box.toOpaque()))
+                config, transportGet, transportFinalize, box.toOpaque()))
     }
 }
 
@@ -82,51 +81,6 @@ final class URLSessionTransport: Sendable {
                 slot.value = .failure("no HTTP response")
             }
             done.signal()
-        }.resume()
-        done.wait()
-        return slot.value ?? .failure("the transfer never completed")
-    }
-
-    /// One blocking download, keeping the engine's promise: `dest` either
-    /// ends up complete or is not created. `URLSession` lands the bytes
-    /// in its own temp file; the hop to a `.part` sibling may cross
-    /// volumes, but the final step is a same-directory rename, so no
-    /// partial file ever carries the destination's name. A non-2xx status
-    /// writes nothing — its body is not the book.
-    func download(_ request: URLRequest, toPath dest: String) -> Fetched {
-        let slot = Slot<Fetched>()
-        let done = DispatchSemaphore(value: 0)
-        session.downloadTask(with: request) { temp, response, error in
-            defer { done.signal() }
-            if let error {
-                slot.value = .failure(error.localizedDescription)
-                return
-            }
-            guard let response = response as? HTTPURLResponse else {
-                slot.value = .failure("no HTTP response")
-                return
-            }
-            guard (200..<300).contains(response.statusCode) else {
-                slot.value = .response(response, Data())
-                return
-            }
-            guard let temp else {
-                slot.value = .failure("the platform delivered no file")
-                return
-            }
-            // Inside the handler by necessity: the temp file dies when it
-            // returns.
-            let files = FileManager.default
-            let part = dest + ".part"
-            do {
-                try? files.removeItem(atPath: part)
-                try files.moveItem(atPath: temp.path, toPath: part)
-                try files.moveItem(atPath: part, toPath: dest)
-                slot.value = .response(response, Data())
-            } catch {
-                try? files.removeItem(atPath: part)
-                slot.value = .failure("landing the download: \(error.localizedDescription)")
-            }
         }.resume()
         done.wait()
         return slot.value ?? .failure("the transfer never completed")
@@ -188,8 +142,8 @@ private func report(_ outcome: URLSessionTransport.Fetched, into response: Opaqu
 
 // The C entry points. Plain functions, not closures, so they carry no
 // context — everything they need rides in `user`. Internal rather than
-// private because `cb_sync_open` takes the same `get` and `finalize`,
-// and `cb_catalog_open` those plus `download`.
+// private because `cb_sync_open` and `cb_catalog_open` take the same
+// `get` and `finalize`.
 
 func transportGet(
     request: UnsafePointer<cb_http_request>?,
@@ -229,21 +183,6 @@ func transportSend(
     }
     let transport = Unmanaged<URLSessionTransport>.fromOpaque(user).takeUnretainedValue()
     report(transport.perform(built), into: response)
-}
-
-func transportDownload(
-    request: UnsafePointer<cb_http_request>?,
-    dest: UnsafePointer<CChar>?,
-    response: OpaquePointer?,
-    user: UnsafeMutableRawPointer?
-) {
-    guard let request = request?.pointee, let dest, let user else { return }
-    guard let built = urlRequest(from: request) else {
-        _ = cb_http_response_fail(response, "the request URL did not parse")
-        return
-    }
-    let transport = Unmanaged<URLSessionTransport>.fromOpaque(user).takeUnretainedValue()
-    report(transport.download(built, toPath: String(cString: dest)), into: response)
 }
 
 func transportFinalize(user: UnsafeMutableRawPointer?) {

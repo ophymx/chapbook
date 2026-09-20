@@ -227,7 +227,6 @@ pub unsafe extern "C" fn cb_sync_open(
                 (Some(get), Some(send)) => std::sync::Arc::new(transport::SyncTransport {
                     inner: crate::http::host::HostTransport {
                         get,
-                        download: None,
                         finalize,
                         user: transport_user as usize,
                     },

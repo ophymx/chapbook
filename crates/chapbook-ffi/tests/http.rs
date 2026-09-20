@@ -236,7 +236,6 @@ fn config_with_transport(
             cb_config_set_http_transport(
                 config,
                 get,
-                None,
                 Some(finalize),
                 Box::into_raw(context) as *mut c_void,
             )
@@ -369,7 +368,6 @@ fn a_declined_install_still_runs_the_finalizer() {
         cb_config_set_http_transport(
             std::ptr::null_mut(),
             Some(serve),
-            None,
             Some(finalize),
             Box::into_raw(context) as *mut c_void,
         )
@@ -386,7 +384,6 @@ fn a_declined_install_still_runs_the_finalizer() {
     let rc = unsafe {
         cb_config_set_http_transport(
             config,
-            None,
             None,
             Some(finalize),
             Box::into_raw(context) as *mut c_void,
@@ -512,7 +509,6 @@ fn an_entry_describes_a_download_the_host_will_run_itself() {
         unsafe {
             cb_catalog_open(
                 Some(serve),
-                None,
                 Some(finalize),
                 Box::into_raw(context) as *mut c_void,
                 &mut catalog,
@@ -595,7 +591,6 @@ fn a_row_with_nothing_to_acquire_offers_no_download() {
         unsafe {
             cb_catalog_open(
                 Some(serve),
-                None,
                 Some(finalize),
                 Box::into_raw(context) as *mut c_void,
                 &mut catalog,

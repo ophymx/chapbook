@@ -2569,7 +2569,7 @@ fn a_catalog_can_be_browsed_and_a_book_taken_from_it() {
 
     let mut catalog: *mut cb_catalog = std::ptr::null_mut();
     assert_eq!(
-        unsafe { cb_catalog_open(None, None, None, std::ptr::null_mut(), &mut catalog,) },
+        unsafe { cb_catalog_open(None, None, std::ptr::null_mut(), &mut catalog) },
         cb_status::CB_OK,
         "{}",
         last_error()

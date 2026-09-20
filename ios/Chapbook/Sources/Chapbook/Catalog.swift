@@ -102,10 +102,11 @@ public final class Catalog {
 
     /// Open a catalog client over `transport`.
     ///
-    /// The `URLSession` path installs both halves the engine can use: the
-    /// GET every feed rides on, and a download straight to a file for the
-    /// book itself. On failure the engine has already run the transport's
-    /// finalizer — its ownership rule — so there is nothing to release.
+    /// Fetching bytes is all a transport does: the engine writes any file
+    /// it downloads itself, and a transfer that has to outlive the app is
+    /// the app's own — see ``downloadRequest(_:)``. On failure the engine
+    /// has already run the transport's finalizer — its ownership rule —
+    /// so there is nothing to release.
     public init(transport: HTTPTransport = .platformDefault) throws {
         var handle: OpaquePointer?
         let status: Int32
@@ -113,11 +114,11 @@ public final class Catalog {
         case .bundled:
             // All null asks for the bundled transport; the open declines
             // honestly in a build without one.
-            status = cb_catalog_open(nil, nil, nil, nil, &handle)
+            status = cb_catalog_open(nil, nil, nil, &handle)
         case .urlSession(let session):
             let box = Unmanaged.passRetained(URLSessionTransport(session: session))
             status = cb_catalog_open(
-                transportGet, transportDownload, transportFinalize, box.toOpaque(), &handle)
+                transportGet, transportFinalize, box.toOpaque(), &handle)
         }
         try check(status)
         guard let handle else { throw ChapbookError.openFailure() }

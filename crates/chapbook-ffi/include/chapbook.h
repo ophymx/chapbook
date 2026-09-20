@@ -970,34 +970,6 @@ typedef void (*cb_http_get_fn)(const struct cb_http_request *request,
                                void *user);
 
 /**
- * Fetches straight to a file — optional, for a host whose own
- * fetch-to-file beats streaming through the get callback: the system
- * trust store and cookie jar, a temp file the platform already manages,
- * resume within a session. Null means the engine streams through the get
- * callback and writes the file itself.
- *
- * Not background transfer. Like every callback in this ABI it must block
- * until the transfer settles, which is the one thing a transfer
- * outliving its process does not do — an iOS background `URLSession`
- * wants a delegate and refuses completion-handler tasks, and
- * `WorkManager` is a job scheduler. A download meant to survive
- * suspension is the host's to own end to end: it has an identity, it
- * reports progress, and it finishes by waking the app rather than by
- * returning. This callback cannot express any of that, and a host that
- * needs it should not reach for this.
- *
- * The promise an implementation must keep: `dest` either ends up
- * complete or is not created — no partial file under the final name. On
- * a non-2xx status, report the status and write nothing. Report the
- * status with [`cb_http_response_set_status`]; the body builders are
- * ignored here, the bytes belong in `dest`.
- */
-typedef void (*cb_http_download_fn)(const struct cb_http_request *request,
-                                    const char *dest,
-                                    struct cb_http_response *response,
-                                    void *user);
-
-/**
  * Releases whatever `user` points at, once, when the transport is
  * dropped — the config freed unopened, or the last session holding it
  * closed. This is what lets a host hand over a reference-counted object
@@ -1582,14 +1554,16 @@ cb_status cb_session_annotation_color(const struct cb_session *session,
  * Open a catalog client.
  *
  * The transport is the host's, on the same terms as everywhere else:
- * pass `get` and optionally `download` — a host that owns a background
- * download facility should, since a book is the one transfer worth
- * surviving a suspended process — or pass both null to use the bundled
- * one where this build has it. `finalize` releases `user` exactly once,
+ * pass `get`, or pass null to use the bundled one where this build has
+ * it. Fetching bytes is all a transport ever does here — writing a
+ * downloaded file is the engine's job, and a transfer that has to
+ * outlive the process is the host's own, taken apart through
+ * [`CB_ENTRY_DOWNLOAD_URL`](cb_entry_field::CB_ENTRY_DOWNLOAD_URL)
+ * rather than handed to a callback that could not survive it either.
+ * `finalize` releases `user` exactly once,
  * including on every failure path of this call.
  */
 cb_status cb_catalog_open(cb_http_get_fn get,
-                          cb_http_download_fn download,
                           cb_http_finalize_fn finalize,
                           void *user,
                           struct cb_catalog **out);
@@ -1931,7 +1905,7 @@ cb_status cb_http_response_fail(struct cb_http_response *response, const char *m
 /**
  * Fetch through the host's networking instead of the bundled transport.
  *
- * `get` is required; `download` and `finalize` may be null. `user` is
+ * `get` is required; `finalize` may be null. `user` is
  * handed back to every callback untouched. **The transport owns `user`
  * from this call on**: `finalize` runs exactly once — when the config is
  * freed unopened, when the last session holding the transport closes,
@@ -1954,7 +1928,6 @@ cb_status cb_http_response_fail(struct cb_http_response *response, const char *m
  */
 cb_status cb_config_set_http_transport(struct cb_config *config,
                                        cb_http_get_fn get,
-                                       cb_http_download_fn download,
                                        cb_http_finalize_fn finalize,
                                        void *user);
 

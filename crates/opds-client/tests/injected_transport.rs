@@ -7,7 +7,6 @@
 
 use std::collections::HashMap;
 use std::io::Cursor;
-use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use opds_client::http::{HttpClient, HttpError, HttpRequest, HttpResponse};
@@ -108,25 +107,6 @@ impl HttpClient for FakeHttp {
             }
             None => Ok(respond(404, None, Vec::new())),
         }
-    }
-}
-
-/// A transport that owns downloading, the way an iOS background
-/// `URLSession` or Android `WorkManager` would.
-struct HostDownloader {
-    inner: FakeHttp,
-    took_over: Arc<Mutex<bool>>,
-}
-
-impl HttpClient for HostDownloader {
-    fn get(&self, request: HttpRequest) -> Result<HttpResponse, HttpError> {
-        self.inner.get(request)
-    }
-
-    fn download(&self, _request: HttpRequest, dest: &Path) -> Result<u16, HttpError> {
-        *self.took_over.lock().unwrap() = true;
-        std::fs::write(dest, b"handed over by the host").map_err(HttpError::new)?;
-        Ok(200)
     }
 }
 
@@ -276,28 +256,6 @@ fn the_default_download_lands_complete_and_leaves_no_temp_file() {
         !dest.with_extension("part").exists(),
         "temp file must be renamed away"
     );
-    std::fs::remove_dir_all(&dir).ok();
-}
-
-/// The hook that exists for iOS background `URLSession` and Android
-/// `WorkManager`: a transport that owns a download facility takes the whole
-/// operation, and the client streams nothing itself.
-#[test]
-fn a_transport_may_take_over_downloading_entirely() {
-    let dir = scratch("handover");
-    let dest = dir.join("b1.epub");
-    let took_over = Arc::new(Mutex::new(false));
-
-    let client = OpdsClient::new(HostDownloader {
-        inner: catalog(),
-        took_over: Arc::clone(&took_over),
-    });
-    client
-        .download(&format!("{HOST}/dl/b1.epub"), &dest)
-        .unwrap();
-
-    assert!(*took_over.lock().unwrap(), "override was not called");
-    assert_eq!(std::fs::read(&dest).unwrap(), b"handed over by the host");
     std::fs::remove_dir_all(&dir).ok();
 }
 

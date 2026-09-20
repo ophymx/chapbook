@@ -117,8 +117,18 @@ impl OpdsClient {
         self.fetch(&url)
     }
 
-    /// Download an acquisition to `dest`, complete or not at all. No Range
-    /// resume is assumed — an interrupted download restarts.
+    /// Download an acquisition to `dest`, complete or not at all.
+    ///
+    /// Fetches through [`get`](HttpClient::get) and streams the body into
+    /// a sibling `.part` file, syncs it, then renames — so a reader never
+    /// opens a half-written book, and an interrupted download leaves
+    /// nothing behind. No Range resume is assumed: an interrupted
+    /// download restarts.
+    ///
+    /// **The transport does not get to override this.** Writing the file
+    /// is this crate's job, and a transport that did it instead would be
+    /// reimplementing one rename in every language a host is written in,
+    /// each with its own chance of leaving a torn file behind.
     ///
     /// This blocks until the transfer settles, holding a thread for the
     /// whole of it, which is right for a desktop process and wrong for a
@@ -127,25 +137,34 @@ impl OpdsClient {
     /// [`Entry::download_request`](crate::Entry::download_request)
     /// describes the fetch and the host performs it. The
     /// [`download`](crate::download) module has the trade in full.
-    ///
-    /// The injected transport may still do the writing here — see
-    /// [`HttpClient::download`], worth overriding when the host's own
-    /// fetch-to-file avoids buffering a whole book in memory on the way
-    /// through.
     pub fn download(&self, url: &str, dest: &Path) -> Result<(), OpdsError> {
-        let status = self
+        let mut response = self
             .http
-            .download(self.request(url, "*/*"), dest)
+            .get(self.request(url, "*/*"))
             .map_err(|e| OpdsError::Network(e.to_string()))?;
-        if status == 401 {
-            // No Authentication Document here: the transport owns the body
-            // on this path, and a download 401 is a retry-with-credentials
-            // signal rather than a login prompt.
+        if response.status == 401 {
+            // No Authentication Document here: a download 401 is a
+            // retry-with-credentials signal rather than a login prompt,
+            // and the body on this path is not one.
             return Err(OpdsError::AuthRequired(None));
         }
-        if !(200..300).contains(&status) {
-            return Err(OpdsError::Http(status));
+        if !(200..300).contains(&response.status) {
+            return Err(OpdsError::Http(response.status));
         }
+        let tmp = dest.with_extension("part");
+        let copy = (|| -> std::io::Result<()> {
+            let mut file = std::fs::File::create(&tmp)?;
+            std::io::copy(&mut response.body, &mut file)?;
+            file.sync_all()
+        })();
+        if let Err(e) = copy {
+            let _ = std::fs::remove_file(&tmp);
+            return Err(OpdsError::Network(format!("write {}: {e}", tmp.display())));
+        }
+        std::fs::rename(&tmp, dest).map_err(|e| {
+            let _ = std::fs::remove_file(&tmp);
+            OpdsError::Network(format!("rename to {}: {e}", dest.display()))
+        })?;
         Ok(())
     }
 

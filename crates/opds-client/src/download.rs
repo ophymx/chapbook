@@ -6,9 +6,14 @@
 //! wrong shape for a phone: a transfer that has to survive the app being
 //! suspended is a *job*, not a call. It has an identity, it reports
 //! progress, and it finishes by waking the app rather than by returning —
-//! none of which a blocking function can express. See
-//! [`HttpClient::download`](crate::http::HttpClient::download) for why
-//! overriding the transport does not rescue this.
+//! none of which a blocking function can express.
+//!
+//! The transport does not rescue it, which is why there is no hook there
+//! to reach for. [`HttpClient`](crate::HttpClient) fetches bytes and
+//! nothing else: every method on it blocks until its request settles,
+//! so an implementation that "owned downloading" would hold a thread for
+//! the whole transfer — precisely what a transfer outliving its process
+//! does not do.
 //!
 //! So the other door hands the whole transfer over. [`DownloadRequest`]
 //! describes what to fetch; the host fetches it with `WorkManager`,

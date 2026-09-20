@@ -34,8 +34,12 @@
 //! better concurrency than this ABI could invent — coroutines, an async
 //! context, a `URLSession` — so the calls stay simple and the host runs
 //! them off its main thread, which is also where its own cancellation
-//! belongs. A host with a background download facility gives it to
-//! [`cb_catalog_open`] and the engine uses that instead.
+//! belongs. A transfer that must survive the app being suspended is not
+//! served by this call at all — no callback can be, since every one of
+//! them blocks until it settles. Take the download apart instead:
+//! [`CB_ENTRY_DOWNLOAD_URL`](cb_entry_field::CB_ENTRY_DOWNLOAD_URL) and
+//! the fields beside it, your own transfer, then
+//! [`cb_library_import_file`](crate::cb_library_import_file).
 //!
 //! **Images cross as URLs, never as bytes.** A cover grid is what a
 //! platform image loader is *for* — caching, cancellation, decode
@@ -194,15 +198,17 @@ fn entry_at(
 /// Open a catalog client.
 ///
 /// The transport is the host's, on the same terms as everywhere else:
-/// pass `get` and optionally `download` — a host that owns a background
-/// download facility should, since a book is the one transfer worth
-/// surviving a suspended process — or pass both null to use the bundled
-/// one where this build has it. `finalize` releases `user` exactly once,
+/// pass `get`, or pass null to use the bundled one where this build has
+/// it. Fetching bytes is all a transport ever does here — writing a
+/// downloaded file is the engine's job, and a transfer that has to
+/// outlive the process is the host's own, taken apart through
+/// [`CB_ENTRY_DOWNLOAD_URL`](cb_entry_field::CB_ENTRY_DOWNLOAD_URL)
+/// rather than handed to a callback that could not survive it either.
+/// `finalize` releases `user` exactly once,
 /// including on every failure path of this call.
 #[no_mangle]
 pub unsafe extern "C" fn cb_catalog_open(
     get: crate::http::cb_http_get_fn,
-    download: crate::http::cb_http_download_fn,
     finalize: crate::http::cb_http_finalize_fn,
     user: *mut c_void,
     out: *mut *mut cb_catalog,
@@ -226,7 +232,6 @@ pub unsafe extern "C" fn cb_catalog_open(
             let client = match get {
                 Some(get) => OpdsClient::new(crate::http::host::HostTransport {
                     get,
-                    download,
                     finalize,
                     user: user as usize,
                 }),
@@ -260,7 +265,7 @@ pub unsafe extern "C" fn cb_catalog_open(
         }
         #[cfg(not(feature = "opds"))]
         {
-            let _ = (get, download, out);
+            let _ = (get, out);
             decline(
                 cb_status::CB_ERR_FORMAT_NOT_BUILT,
                 "this build has no OPDS support",

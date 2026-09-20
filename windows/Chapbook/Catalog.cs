@@ -122,12 +122,9 @@ public sealed class Catalog : IDisposable
         nint user = TransportBridge.Pin(transport);
         unsafe
         {
-            // No download callback, for the same reason the session
-            // configuration passes none: the engine streams through `get`
-            // and writes the file itself.
             ChapbookException.Check(
                 Interop.cb_catalog_open(
-                    (nint)TransportBridge.Get, 0, (nint)TransportBridge.Finalize, user,
+                    (nint)TransportBridge.Get, (nint)TransportBridge.Finalize, user,
                     out _handle),
                 nameof(Catalog));
         }
@@ -140,7 +137,7 @@ public sealed class Catalog : IDisposable
     public Catalog()
     {
         ChapbookException.Check(
-            Interop.cb_catalog_open(0, 0, 0, 0, out _handle), nameof(Catalog));
+            Interop.cb_catalog_open(0, 0, 0, out _handle), nameof(Catalog));
     }
 
     private nint Live() =>
