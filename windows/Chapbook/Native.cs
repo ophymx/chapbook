@@ -472,6 +472,12 @@ internal enum EntryField
     ThumbnailUrl = 5,
     CoverUrl = 6,
     Href = 7,
+    Id = 8,
+    DownloadUrl = 9,
+    DownloadFilename = 10,
+    DownloadMediaType = 11,
+    ProgressionUrl = 12,
+    AnnotationContainer = 13,
 }
 
 /// <summary>Which of a facet's strings to read.</summary>

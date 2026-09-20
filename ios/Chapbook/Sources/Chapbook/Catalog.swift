@@ -269,6 +269,124 @@ public final class Catalog {
         readString { cb_catalog_page_href(raw, direction, $0, $1, $2) }.flatMap(URL.init)
     }
 
+    // MARK: A download the app runs itself
+
+    /// Everything needed to fetch one book yourself, for a transfer that
+    /// has to outlive the screen that started it.
+    ///
+    /// ``Catalog/download(_:into:)`` runs the whole transfer inside one
+    /// blocking call, which is right for a tap the reader is watching and
+    /// wrong for anything else — the process has to stay alive for it, and
+    /// no transport rescues that. A background `URLSession` refuses
+    /// completion-handler tasks and wants a delegate, precisely because a
+    /// transfer that survives suspension is a job rather than a call.
+    ///
+    /// So take one of these instead, hand it to a background session, and
+    /// call ``Library/importFile(at:)`` when the file lands.
+    ///
+    /// **Every field is advice except ``url``.** Rename the file, add
+    /// headers, use whatever configuration the app already has. The engine
+    /// reads a book by its bytes, so the name it arrives under is free.
+    ///
+    /// **No credential travels in here, deliberately.** The app opened
+    /// this catalog, so it already knows which credential the catalog
+    /// takes — set `Authorization` on the request when the transfer
+    /// starts. That keeps the secret out of a `URLSessionTask`'s
+    /// description, which is persisted, and means a token rotated between
+    /// enqueueing and running is simply fresh.
+    ///
+    /// ``progressionURL`` and ``annotationContainer`` are why this type
+    /// exists. They live in the catalog entry and nowhere else, and by the
+    /// time a background download lands the feed is usually gone — so
+    /// they are captured here, persisted with the job, and handed to
+    /// `Library.setSyncTargets` after the import.
+    /// `Codable` so the whole thing survives a process restart: a
+    /// background transfer outlives the screen that started it, and
+    /// `URLSessionTask.taskDescription` is one string. Encode it there,
+    /// or into whatever the app already persists jobs in, and decode it
+    /// in the delegate that gets the completed file.
+    public struct DownloadRequest: Sendable, Codable {
+        /// The acquisition to fetch. The one field that is not advice.
+        public let url: URL
+        /// Send these, plus whatever the app sends of its own.
+        public let headers: [String: String]
+        /// One safe path component, for a Files entry or a notification.
+        public let suggestedFilename: String
+        /// What the catalog claims the file is. A hint for the UI only.
+        public let mediaType: String?
+        /// The entry's title, so a progress notification can name the book.
+        public let title: String
+        /// The entry's OPDS id: opaque, a key for the app's own job
+        /// record. Never build a path out of it.
+        public let entryID: String
+        /// The position-sync service this entry advertises, or `nil`.
+        public let progressionURL: URL?
+        /// The Web Annotation container, or `nil`.
+        public let annotationContainer: URL?
+
+        /// The request as `URLSession` wants it, headers already set.
+        /// Add the app's own credential before handing it over.
+        /// Public so a host can rebuild one it persisted — the
+        /// synthesized memberwise initializer would be internal.
+        public init(
+            url: URL,
+            headers: [String: String],
+            suggestedFilename: String,
+            mediaType: String?,
+            title: String,
+            entryID: String,
+            progressionURL: URL?,
+            annotationContainer: URL?
+        ) {
+            self.url = url
+            self.headers = headers
+            self.suggestedFilename = suggestedFilename
+            self.mediaType = mediaType
+            self.title = title
+            self.entryID = entryID
+            self.progressionURL = progressionURL
+            self.annotationContainer = annotationContainer
+        }
+
+        public var urlRequest: URLRequest {
+            var request = URLRequest(url: url)
+            for (name, value) in headers {
+                request.setValue(value, forHTTPHeaderField: name)
+            }
+            return request
+        }
+    }
+
+    /// Describe an entry's download so the app can run it itself, or
+    /// `nil` where the row has nothing to fetch.
+    ///
+    /// Cheap and local: it reads the held feed and touches no network. Do
+    /// it while the catalog is open, because the entry is the only place
+    /// the sync services exist — see ``DownloadRequest``.
+    public func downloadRequest(_ entry: Entry) throws -> DownloadRequest? {
+        try downloadRequest(entryAt: entry.index)
+    }
+
+    /// ``downloadRequest(_:)`` by index, for a host that kept only that.
+    public func downloadRequest(entryAt index: Int) throws -> DownloadRequest? {
+        guard let url = try text(index, CB_ENTRY_DOWNLOAD_URL).flatMap(URL.init) else {
+            return nil
+        }
+        return DownloadRequest(
+            url: url,
+            // One constant header, assembled here rather than crossed:
+            // catalog servers negotiate by naive substring match, so this
+            // is exactly what the engine would have sent.
+            headers: ["Accept": "*/*"],
+            suggestedFilename: try text(index, CB_ENTRY_DOWNLOAD_FILENAME) ?? "book",
+            mediaType: try text(index, CB_ENTRY_DOWNLOAD_MEDIA_TYPE),
+            title: try text(index, CB_ENTRY_TITLE) ?? "",
+            entryID: try text(index, CB_ENTRY_ID) ?? "",
+            progressionURL: try text(index, CB_ENTRY_PROGRESSION_URL).flatMap(URL.init),
+            annotationContainer: try text(index, CB_ENTRY_ANNOTATION_CONTAINER)
+                .flatMap(URL.init))
+    }
+
     // MARK: Onto the shelf
 
     /// Put an entry on the shelf: fetch it, import it into the library at
@@ -282,7 +400,15 @@ public final class Catalog {
     /// that will never reconcile.
     ///
     /// **Blocking, and the slowest call in this package**: it is a whole
-    /// book over the network. Throws `CB_ERR_UNAVAILABLE` for an entry
+    /// book over the network, inside this call — so it is also the wrong
+    /// call for a download that must survive the app being suspended. For
+    /// that use ``downloadRequest(_:)`` with a background `URLSession`,
+    /// then ``Library/importFile(at:)`` and `Library.setSyncTargets`.
+    /// This is exactly those steps run back to back, which is why the
+    /// services have to be read before a transfer that will outlive the
+    /// feed.
+    ///
+    /// Throws `CB_ERR_UNAVAILABLE` for an entry
     /// with nothing to acquire — a navigation row, or a purchase-only
     /// entry whose `href` belongs in a browser. The staging file is
     /// removed whatever happens; the library keeps its own copy.

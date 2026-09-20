@@ -373,6 +373,10 @@ internal static partial class Interop
     internal static partial Status cb_library_set_finished(
         nint library, long book, byte finished);
 
+    [LibraryImport(Library, StringMarshalling = StringMarshalling.Utf8)]
+    internal static partial Status cb_library_import_file(
+        nint library, string path, out long book);
+
     [LibraryImport(Library)]
     internal static partial Status cb_session_book_id(nint session, out long book);
 

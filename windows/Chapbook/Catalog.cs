@@ -278,6 +278,95 @@ public sealed class Catalog : IDisposable
         return entries;
     }
 
+    /// <summary>
+    /// Everything needed to fetch one book yourself, for a transfer that
+    /// has to outlive the window that started it.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <see cref="Download(CatalogEntry, string)"/> runs the whole
+    /// transfer inside one blocking call, which is right for a click the
+    /// reader is watching and wrong for anything else — the process has
+    /// to stay alive for it. Take one of these instead, hand it to
+    /// <c>BackgroundTransferSession</c> or your own downloader, and call
+    /// <see cref="Library.ImportFile"/> when the file lands.
+    /// </para>
+    /// <para>
+    /// <b>Every field is advice except <c>Url</c>.</b> Rename the file,
+    /// add headers, route it however the app routes things. The engine
+    /// reads a book by its bytes, so the name it arrives under is free.
+    /// </para>
+    /// <para>
+    /// <b>No credential travels in here, deliberately.</b> The app opened
+    /// this catalogue, so it already knows which credential it takes — set
+    /// <c>Authorization</c> when the transfer starts. That keeps the
+    /// secret out of anything the transfer persists, and means a token
+    /// rotated between queueing and running is simply fresh.
+    /// </para>
+    /// <para>
+    /// <c>ProgressionUrl</c> and <c>AnnotationContainer</c> are why this
+    /// type exists. They live in the catalogue entry and nowhere else, and
+    /// by the time a background download lands the feed is usually gone —
+    /// so they are captured here, persisted with the job, and handed to
+    /// <see cref="Library.SetSyncTargets"/> after the import.
+    /// </para>
+    /// </remarks>
+    /// <param name="Url">The acquisition. The one field that is not advice.</param>
+    /// <param name="Headers">Send these, plus whatever the app sends of its own.</param>
+    /// <param name="SuggestedFilename">One safe path component, for a Downloads entry.</param>
+    /// <param name="MediaType">What the catalogue claims it is. A UI hint only.</param>
+    /// <param name="Title">The entry's title, so progress can name the book.</param>
+    /// <param name="EntryId">
+    /// The entry's OPDS id: opaque, a key for the app's own job record.
+    /// Never build a path out of it.
+    /// </param>
+    /// <param name="ProgressionUrl">The position-sync service, or null.</param>
+    /// <param name="AnnotationContainer">The Web Annotation container, or null.</param>
+    public record DownloadRequest(
+        string Url,
+        IReadOnlyDictionary<string, string> Headers,
+        string SuggestedFilename,
+        string? MediaType,
+        string Title,
+        string EntryId,
+        string? ProgressionUrl,
+        string? AnnotationContainer);
+
+    /// <summary>
+    /// Describe an entry's download so the app can run it itself, or
+    /// <c>null</c> where the row has nothing to fetch.
+    /// </summary>
+    /// <remarks>
+    /// Cheap and local: it reads the held feed and touches no network. Do
+    /// it while the catalogue is open, because the entry is the only place
+    /// the sync services exist — see <see cref="DownloadRequest"/>.
+    /// </remarks>
+    public DownloadRequest? GetDownloadRequest(CatalogEntry entry) =>
+        GetDownloadRequest(entry.Index);
+
+    /// <inheritdoc cref="GetDownloadRequest(CatalogEntry)"/>
+    public DownloadRequest? GetDownloadRequest(int index)
+    {
+        nuint at = (nuint)index;
+        string? url = Text(at, EntryField.DownloadUrl);
+        if (url is null)
+        {
+            return null;
+        }
+        return new DownloadRequest(
+            url,
+            // One constant header, assembled here rather than crossed:
+            // catalogue servers negotiate by naive substring match, so
+            // this is exactly what the engine would have sent.
+            new Dictionary<string, string> { ["Accept"] = "*/*" },
+            Text(at, EntryField.DownloadFilename) ?? "book",
+            Text(at, EntryField.DownloadMediaType),
+            Text(at, EntryField.Title) ?? string.Empty,
+            Text(at, EntryField.Id) ?? string.Empty,
+            Text(at, EntryField.ProgressionUrl),
+            Text(at, EntryField.AnnotationContainer));
+    }
+
     private string? Text(nuint index, EntryField field) =>
         Strings.Read((byte[]? b, nuint c, out nuint n) =>
             Interop.cb_catalog_entry_text(Live(), index, field, b, c, out n), nameof(Entries));
@@ -340,7 +429,16 @@ public sealed class Catalog : IDisposable
     /// </para>
     /// <para>
     /// <b>Blocking, and the slowest call in this binding</b>: it is a
-    /// whole book over the network. Throws with
+    /// whole book over the network, inside this call — so it is also the
+    /// wrong call for a download that must survive the process. For that
+    /// use <see cref="GetDownloadRequest(CatalogEntry)"/>, then
+    /// <see cref="Library.ImportFile"/> and
+    /// <see cref="Library.SetSyncTargets"/>. This is exactly those steps
+    /// run back to back, which is why the services have to be read before
+    /// a transfer that will outlive the feed.
+    /// </para>
+    /// <para>
+    /// Throws with
     /// <see cref="Status.Unavailable"/> for an entry with nothing to
     /// acquire — a navigation row, or a purchase-only entry whose
     /// <see cref="CatalogEntry.Href"/> belongs in a browser.
