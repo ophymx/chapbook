@@ -34,8 +34,12 @@
 //! better concurrency than this ABI could invent — coroutines, an async
 //! context, a `URLSession` — so the calls stay simple and the host runs
 //! them off its main thread, which is also where its own cancellation
-//! belongs. A host with a background download facility gives it to
-//! [`cb_catalog_open`] and the engine uses that instead.
+//! belongs. A transfer that must survive the app being suspended is not
+//! served by this call at all — no callback can be, since every one of
+//! them blocks until it settles. Take the download apart instead:
+//! [`CB_ENTRY_DOWNLOAD_URL`](cb_entry_field::CB_ENTRY_DOWNLOAD_URL) and
+//! the fields beside it, your own transfer, then
+//! [`cb_library_import_file`](crate::cb_library_import_file).
 //!
 //! **Images cross as URLs, never as bytes.** A cover grid is what a
 //! platform image loader is *for* — caching, cancellation, decode
@@ -194,15 +198,17 @@ fn entry_at(
 /// Open a catalog client.
 ///
 /// The transport is the host's, on the same terms as everywhere else:
-/// pass `get` and optionally `download` — a host that owns a background
-/// download facility should, since a book is the one transfer worth
-/// surviving a suspended process — or pass both null to use the bundled
-/// one where this build has it. `finalize` releases `user` exactly once,
+/// pass `get`, or pass null to use the bundled one where this build has
+/// it. Fetching bytes is all a transport ever does here — writing a
+/// downloaded file is the engine's job, and a transfer that has to
+/// outlive the process is the host's own, taken apart through
+/// [`CB_ENTRY_DOWNLOAD_URL`](cb_entry_field::CB_ENTRY_DOWNLOAD_URL)
+/// rather than handed to a callback that could not survive it either.
+/// `finalize` releases `user` exactly once,
 /// including on every failure path of this call.
 #[no_mangle]
 pub unsafe extern "C" fn cb_catalog_open(
     get: crate::http::cb_http_get_fn,
-    download: crate::http::cb_http_download_fn,
     finalize: crate::http::cb_http_finalize_fn,
     user: *mut c_void,
     out: *mut *mut cb_catalog,
@@ -226,7 +232,6 @@ pub unsafe extern "C" fn cb_catalog_open(
             let client = match get {
                 Some(get) => OpdsClient::new(crate::http::host::HostTransport {
                     get,
-                    download,
                     finalize,
                     user: user as usize,
                 }),
@@ -260,7 +265,7 @@ pub unsafe extern "C" fn cb_catalog_open(
         }
         #[cfg(not(feature = "opds"))]
         {
-            let _ = (get, download, out);
+            let _ = (get, out);
             decline(
                 cb_status::CB_ERR_FORMAT_NOT_BUILT,
                 "this build has no OPDS support",
@@ -552,6 +557,24 @@ fn chapbook_sync_targets(entry: &chapbook_reader::chapbook_opds::Entry) -> (bool
     }
 }
 
+/// The sync service hrefs an entry advertises, unresolved — `(None,
+/// None)` in a build without sync, which is how the row flags above
+/// already report it.
+#[cfg(feature = "opds")]
+fn sync_target_hrefs(
+    entry: &chapbook_reader::chapbook_opds::Entry,
+) -> (Option<String>, Option<String>) {
+    #[cfg(feature = "sync")]
+    {
+        chapbook_sync::targets_of(entry)
+    }
+    #[cfg(not(feature = "sync"))]
+    {
+        let _ = entry;
+        (None, None)
+    }
+}
+
 /// Which string an entry accessor should answer with.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -578,6 +601,50 @@ pub enum cb_entry_field {
     /// a purchase page answers with that page, which a host opens in a
     /// browser rather than downloading.
     CB_ENTRY_HREF = 7,
+    /// The entry's OPDS id, opaque — comic-server ids contain slashes
+    /// and dots. A stable key for a host's own record of a download it
+    /// enqueued; never normalize it, and never build a path out of it.
+    CB_ENTRY_ID = 8,
+    /// The acquisition to fetch, for a host performing the download
+    /// itself. Unlike [`CB_ENTRY_HREF`](cb_entry_field::CB_ENTRY_HREF)
+    /// this never falls back to another kind of link, so a navigation
+    /// row answers `CB_ERR_UNAVAILABLE` rather than handing back a feed
+    /// URL that would download as a book.
+    ///
+    /// Send it with `Accept` set to the wildcard media range — type
+    /// `*`, subtype `*` — and nothing else of the engine's. The header
+    /// list is not crossed here because there is exactly one and it is
+    /// constant. (Spelled out rather than written literally: the
+    /// two-character form would close this comment in the generated C
+    /// header, which `tests/header.rs` compiles.)
+    CB_ENTRY_DOWNLOAD_URL = 9,
+    /// A filename for the user's benefit: one safe path component, with
+    /// no separators or control characters, and an extension guessed
+    /// from the advertised type.
+    ///
+    /// Advice, not instruction. It is not unique, it means nothing to
+    /// the engine — format is decided by sniffing bytes — and a host
+    /// should validate it against its own filesystem's rules. Renaming
+    /// the file is expected and costs nothing.
+    CB_ENTRY_DOWNLOAD_FILENAME = 10,
+    /// The acquisition link's advertised type, verbatim. A hint for the
+    /// host's own UI; do not trust it to decide how to read the file.
+    CB_ENTRY_DOWNLOAD_MEDIA_TYPE = 11,
+    /// The position-sync service this entry advertises, absolute.
+    ///
+    /// **Read it before the download, not after.** It lives in the
+    /// catalog entry and nowhere else, so a host whose transfer outlives
+    /// the feed must persist it alongside the job and hand it to
+    /// [`cb_library_set_sync_targets`](crate::cb_library_set_sync_targets)
+    /// once the file lands. `CB_ERR_UNAVAILABLE` where the entry
+    /// advertises none — and in a build without sync, which reports no
+    /// targets exactly as the row flags do.
+    CB_ENTRY_PROGRESSION_URL = 12,
+    /// The Web Annotation container this entry advertises, absolute.
+    /// Everything said of
+    /// [`CB_ENTRY_PROGRESSION_URL`](cb_entry_field::CB_ENTRY_PROGRESSION_URL)
+    /// applies.
+    CB_ENTRY_ANNOTATION_CONTAINER = 13,
 }
 
 /// One of an entry's strings. `CB_ERR_UNAVAILABLE` where the entry
@@ -620,6 +687,26 @@ pub unsafe extern "C" fn cb_catalog_entry_text(
                     .next()
                     .or_else(|| entry.links.first())
                     .map(|link| resolve_url(&catalog.base, &link.href)),
+                cb_entry_field::CB_ENTRY_ID => Some(entry.id.clone()),
+                cb_entry_field::CB_ENTRY_DOWNLOAD_URL => entry
+                    .download_request()
+                    .map(|request| resolve_url(&catalog.base, &request.url)),
+                cb_entry_field::CB_ENTRY_DOWNLOAD_FILENAME => entry
+                    .download_request()
+                    .map(|request| request.suggested_filename),
+                cb_entry_field::CB_ENTRY_DOWNLOAD_MEDIA_TYPE => {
+                    entry.download_request().and_then(|request| request.media_type)
+                }
+                // Resolved even though the parser already did it against
+                // the request URL: it is a no-op on an absolute href, and
+                // it is what stops a root-relative service path — which
+                // real catalogs do serve — reaching the library as a path.
+                cb_entry_field::CB_ENTRY_PROGRESSION_URL => sync_target_hrefs(entry)
+                    .0
+                    .map(|href| resolve_url(&catalog.base, &href)),
+                cb_entry_field::CB_ENTRY_ANNOTATION_CONTAINER => sync_target_hrefs(entry)
+                    .1
+                    .map(|href| resolve_url(&catalog.base, &href)),
             };
             let Some(value) = value else {
                 return fail(
@@ -848,9 +935,21 @@ pub unsafe extern "C" fn cb_catalog_has_search(
 /// to hand to this.
 ///
 /// **Blocking, and the slowest call in this ABI**: it is a whole book
-/// over the network. Run it off the thread that draws, and give
-/// [`cb_catalog_open`] a download callback if the platform has a
-/// facility that survives suspension.
+/// over the network. Run it off the thread that draws — and if the
+/// transfer has to survive the app being suspended, do not use this call
+/// at all. No callback rescues it: every callback in this ABI blocks
+/// until the transfer settles, which is the one thing a background
+/// transfer does not do.
+///
+/// For that, take the same job apart and own it. Read
+/// [`CB_ENTRY_DOWNLOAD_URL`](cb_entry_field::CB_ENTRY_DOWNLOAD_URL) and
+/// the two sync-service fields beside it, fetch with `WorkManager` or a
+/// background `URLSession`, then call
+/// [`cb_library_import_file`](crate::cb_library_import_file) and
+/// [`cb_library_set_sync_targets`](crate::cb_library_set_sync_targets)
+/// when the file lands. This call is exactly those pieces run back to
+/// back on one thread, which is why the sync services have to be read
+/// *before* a transfer that will outlive the feed.
 ///
 /// `CB_ERR_UNAVAILABLE` for an entry with nothing to acquire — a
 /// navigation row, or a purchase-only entry whose

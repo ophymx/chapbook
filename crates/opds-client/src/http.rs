@@ -16,7 +16,6 @@
 
 use std::fmt;
 use std::io::Read;
-use std::path::Path;
 use std::sync::Arc;
 
 /// One outgoing request. GET is the only method catalog browsing needs;
@@ -172,40 +171,6 @@ impl std::error::Error for HttpError {}
 pub trait HttpClient: Send + Sync {
     fn get(&self, request: HttpRequest) -> Result<HttpResponse, HttpError>;
 
-    /// Fetch straight to a file, returning the HTTP status.
-    ///
-    /// The default streams [`get`](HttpClient::get)'s body through a
-    /// sibling temp file and renames it into place, so a reader never sees
-    /// a half-written book; on a non-2xx status it writes nothing and just
-    /// reports the status.
-    ///
-    /// Override it when the host owns a download facility worth having —
-    /// an iOS background `URLSession` or Android's `WorkManager` continue a
-    /// transfer after the process is suspended, which no amount of Rust can
-    /// reproduce. An override must keep the same promise: `dest` either
-    /// ends up complete or is not created.
-    fn download(&self, request: HttpRequest, dest: &Path) -> Result<u16, HttpError> {
-        let mut response = self.get(request)?;
-        if !(200..300).contains(&response.status) {
-            return Ok(response.status);
-        }
-        let tmp = dest.with_extension("part");
-        let copy = (|| -> std::io::Result<()> {
-            let mut file = std::fs::File::create(&tmp)?;
-            std::io::copy(&mut response.body, &mut file)?;
-            file.sync_all()
-        })();
-        if let Err(e) = copy {
-            let _ = std::fs::remove_file(&tmp);
-            return Err(HttpError::new(format!("write {}: {e}", tmp.display())));
-        }
-        std::fs::rename(&tmp, dest).map_err(|e| {
-            let _ = std::fs::remove_file(&tmp);
-            HttpError::new(format!("rename to {}: {e}", dest.display()))
-        })?;
-        Ok(response.status)
-    }
-
     /// Send a request that is not a GET, returning the response — added by
     /// the `write` feature, which the flows that change server state turn
     /// on.
@@ -219,8 +184,8 @@ pub trait HttpClient: Send + Sync {
     /// `body` is `None` for a request that has none; a DELETE with a body
     /// is not something this crate sends.
     ///
-    /// The default refuses rather than pretending to succeed. Unlike
-    /// [`download`](HttpClient::download), this cannot be built out of
+    /// The default refuses rather than pretending to succeed. Unlike a
+    /// fetch-to-file, this cannot be built out of
     /// [`get`](HttpClient::get), and a transport that silently dropped the
     /// write would look to a caller exactly like a reader whose position
     /// syncs and is never stored. Existing transports keep compiling and
@@ -256,10 +221,6 @@ pub trait HttpClient: Send + Sync {
 impl<T: HttpClient + ?Sized> HttpClient for Arc<T> {
     fn get(&self, request: HttpRequest) -> Result<HttpResponse, HttpError> {
         (**self).get(request)
-    }
-
-    fn download(&self, request: HttpRequest, dest: &Path) -> Result<u16, HttpError> {
-        (**self).download(request, dest)
     }
 
     #[cfg(feature = "write")]

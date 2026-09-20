@@ -314,6 +314,35 @@ public final class Library {
         try check(cb_library_delete_book(raw, book))
     }
 
+    /// Put a file on the shelf, answering with the row it became.
+    ///
+    /// **Where a download the app ran itself comes back.** Take a
+    /// `Catalog.DownloadRequest`, fetch it with a background
+    /// `URLSession`, and hand the finished file here. The format is read
+    /// from the bytes, so the name does not matter — which is just as
+    /// well, because `URLSession` lands a download in a temp file under a
+    /// name of its own.
+    ///
+    /// The file is not consumed: the library copies what it imports and
+    /// never deletes the source, which belongs to whoever passed it —
+    /// unlike `Catalog.download(_:into:)`, which removes the staging file
+    /// it made itself. Importing the same bytes twice answers with the
+    /// same row rather than shelving a duplicate, so a transfer the
+    /// system restarted, or a completion delivered twice, needs no
+    /// coordination with this call.
+    ///
+    /// Sync services are not in the file. They live in the catalog entry,
+    /// so pass the `progressionURL` and `annotationContainer` captured in
+    /// the `DownloadRequest` — *before* the transfer, while the feed was
+    /// open — to `setSyncTargets` once this returns a row.
+    ///
+    /// **Blocking**: it copies a whole book. Keep it off the main actor.
+    public func importFile(at url: URL) throws -> Int64 {
+        var book: Int64 = 0
+        try check(cb_library_import_file(raw, url.path, &book))
+        return book
+    }
+
     /// Mark a book finished, or take the mark back.
     ///
     /// A session records this itself when the reader reaches the end, so

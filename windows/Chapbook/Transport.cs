@@ -380,10 +380,6 @@ public sealed partial class SessionConfiguration
                 Interop.cb_config_set_http_transport(
                     Live(),
                     (nint)TransportBridge.Get,
-                    // No download callback: .NET has no background transfer
-                    // facility worth the engine deferring to, so the engine
-                    // streams through `get` and writes the file itself.
-                    0,
                     (nint)TransportBridge.Finalize,
                     user),
                 nameof(WithTransport));

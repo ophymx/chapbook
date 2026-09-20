@@ -227,6 +227,34 @@ class Library private constructor(private var handle: Long) : AutoCloseable {
      * timestamp.
      */
     /**
+     * Put a file on the shelf, answering with its row or null.
+     *
+     * **Where a download your app ran itself comes back.** Take a
+     * [DownloadRequest] off a catalog entry, fetch it with `WorkManager`,
+     * `DownloadManager` or a worker over OkHttp, and hand the finished
+     * file here. The format is read from the bytes, so whatever the
+     * platform named the file is fine — a `content://` copy, a cache file
+     * under a generated name.
+     *
+     * The file is not consumed: the library copies what it imports and
+     * never deletes the source, which is yours. Importing the same bytes
+     * twice answers with the same row rather than shelving a duplicate,
+     * which is what makes a retried worker safe — `WorkManager` reruns
+     * one after a crash or a lost network, and that needs no coordination
+     * with this call.
+     *
+     * Sync services are not in the file. They live in the catalog entry,
+     * so pass [DownloadRequest.progressionUrl] and
+     * [DownloadRequest.annotationContainer] — captured *before* the
+     * transfer, while the feed was still open — to [setSyncTargets] once
+     * this returns a row.
+     *
+     * Blocking: it copies a whole book. Keep it off the main thread.
+     */
+    fun importFile(path: String): Long? =
+        Native.libraryImportFile(handle, path).takeIf { it > 0 }
+
+    /**
      * Record where a book syncs — the two service URLs off the catalog
      * entry it was downloaded from. Null holds none; two nulls make it
      * local again. Both URLs are opaque and may embed a per-user key:

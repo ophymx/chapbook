@@ -293,6 +293,42 @@ public sealed class Library : IDisposable
     public void DeleteBook(long book) =>
         ChapbookException.Check(Interop.cb_library_delete_book(Live(), book), nameof(DeleteBook));
 
+    /// <summary>
+    /// Put a file on the shelf, answering with the row it became.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Where a download the app ran itself comes back.</b> Take a
+    /// <see cref="Catalog.DownloadRequest"/>, fetch it with
+    /// <c>BackgroundTransferSession</c> or an <c>HttpClient</c> of your
+    /// own, and hand the finished file here. The format is read from the
+    /// bytes, so whatever the transfer named the file is fine.
+    /// </para>
+    /// <para>
+    /// The file is not consumed: the library copies what it imports and
+    /// never deletes the source, which is yours — unlike
+    /// <see cref="Catalog.Download(CatalogEntry, string)"/>, which removes
+    /// the staging file it made itself. Importing the same bytes twice
+    /// answers with the same row rather than shelving a duplicate, so a
+    /// retried or twice-delivered transfer needs no coordination with
+    /// this call.
+    /// </para>
+    /// <para>
+    /// Sync services are not in the file. They live in the catalog entry,
+    /// so pass the progression URL and annotation container captured in
+    /// the <see cref="Catalog.DownloadRequest"/> — <i>before</i> the
+    /// transfer, while the feed was open — to
+    /// <see cref="SetSyncTargets"/> once this returns a row.
+    /// </para>
+    /// <para><b>Blocking</b>: it copies a whole book.</para>
+    /// </remarks>
+    public long ImportFile(string path)
+    {
+        ChapbookException.Check(
+            Interop.cb_library_import_file(Live(), path, out long book), nameof(ImportFile));
+        return book;
+    }
+
     /// <summary>Mark a book read, or unread again.</summary>
     public void SetFinished(long book, bool finished) =>
         ChapbookException.Check(

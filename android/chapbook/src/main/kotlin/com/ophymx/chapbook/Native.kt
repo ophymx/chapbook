@@ -246,6 +246,9 @@ internal object Native {
     external fun libraryDeleteBook(handle: Long, book: Long): Boolean
     external fun librarySetFinished(handle: Long, book: Long, finished: Boolean): Boolean
 
+    /** 0 on failure. Does not consume the file; the same bytes twice give the same row. */
+    external fun libraryImportFile(handle: Long, path: String): Long
+
     /** 0 for a book that never reached the library. */
     external fun sessionBookId(handle: Long): Long
 }

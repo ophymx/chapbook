@@ -744,6 +744,62 @@ pub unsafe extern "C" fn cb_library_set_finished(
     })
 }
 
+/// Put a file on the shelf, answering with the library row it became.
+///
+/// The format is decided by sniffing the bytes, so the name and
+/// extension do not matter — which is what lets a host hand over
+/// whatever its platform produced: a `content://` copy, a
+/// `URLSession` temp file under a UUID, a file the reader picked out of
+/// a document browser.
+///
+/// **The file is not consumed.** The library copies what it imports, and
+/// this never deletes or moves the source: it belongs to whoever passed
+/// it. Compare [`cb_catalog_download`](crate::cb_catalog_download),
+/// which removes the staging file it made itself.
+///
+/// **Importing the same bytes twice is not an error.** Books are
+/// identified by content fingerprint, so a second import answers with
+/// the row the first one made rather than shelving a duplicate. That
+/// matters for a background transfer: a job system that retries, or one
+/// whose completion is delivered twice, does not need to coordinate with
+/// this call to stay correct.
+///
+/// This shelves the file and nothing else. A book downloaded from a
+/// catalog also has sync services to record, and those live in the
+/// catalog entry rather than in the file — read them with
+/// [`CB_ENTRY_PROGRESSION_URL`](crate::cb_entry_field::CB_ENTRY_PROGRESSION_URL)
+/// and its neighbour before the transfer starts, then hand them to
+/// [`cb_library_set_sync_targets`] once this has returned an id.
+#[no_mangle]
+pub unsafe extern "C" fn cb_library_import_file(
+    library: *mut cb_library,
+    path: *const c_char,
+    book_id: *mut i64,
+) -> cb_status {
+    guard(cb_status::CB_ERR_PANIC, || {
+        with_library!((library, path, book_id) {
+            clear_last_error();
+            let library = library_mut!(library);
+            // SAFETY: the header's contract for a `const char*`.
+            let Some(path) = (unsafe { str_in(path, "path") }) else {
+                return cb_status::CB_ERR_NULL_ARGUMENT;
+            };
+            let path = std::path::Path::new(path);
+            let publication = match chapbook_reader::open_publication(path) {
+                Ok(publication) => publication,
+                Err(e) => return crate::error::from_error(&e),
+            };
+            match library.inner.import(path, publication.as_ref()) {
+                Ok(id) => {
+                    out!(book_id, id.0, "book_id");
+                    cb_status::CB_OK
+                }
+                Err(e) => crate::error::from_error(&e),
+            }
+        })
+    })
+}
+
 /// Record where a book syncs: its OPDS Progression endpoint and its Web
 /// Annotation container, either or both, null to hold none.
 ///

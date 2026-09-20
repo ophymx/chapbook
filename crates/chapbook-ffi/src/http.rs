@@ -2,13 +2,21 @@
 //!
 //! The bundled `ureq` transport is right for a desktop process and wrong
 //! everywhere a platform owns the networking: an iOS app that opens its
-//! own sockets gives up background transfer, the system trust store, App
-//! Transport Security, per-app VPN and the cellular-data toggle; an
-//! Android app gives up WorkManager. `SessionConfig::with_transport` is
-//! the Rust-side answer, and this module is that seam crossing the ABI —
+//! own sockets gives up the system trust store, App Transport Security,
+//! per-app VPN and the cellular-data toggle; an Android app gives up its
+//! network security config, user CAs and enterprise roots.
+//! `SessionConfig::with_transport` is the Rust-side answer, and this
+//! module is that seam crossing the ABI —
 //! [`cb_config_set_http_transport`] installs host callbacks that fetch,
 //! and every catalog request the session makes goes through them instead
 //! of `ureq`.
+//!
+//! **Background transfer is not on that list, and no callback here
+//! delivers it.** Every one of them blocks until its request settles,
+//! which is the one thing a transfer outliving its process does not do.
+//! That is a job the host owns end to end — see
+//! [`cb_library_import_file`](crate::cb_library_import_file), where the
+//! finished file comes back.
 //!
 //! The response comes back through a builder rather than a struct the
 //! host fills in, for the same reason the config does: a response is
@@ -92,26 +100,6 @@ pub struct cb_http_response {
 pub type cb_http_get_fn = Option<
     unsafe extern "C" fn(
         request: *const cb_http_request,
-        response: *mut cb_http_response,
-        user: *mut c_void,
-    ),
->;
-
-/// Fetches straight to a file — optional, for a host that owns a download
-/// facility worth having (an iOS background `URLSession`, Android's
-/// WorkManager, both of which continue a transfer after the process is
-/// suspended). Null means the engine streams through the get callback and
-/// writes the file itself.
-///
-/// The promise an implementation must keep: `dest` either ends up
-/// complete or is not created — no partial file under the final name. On
-/// a non-2xx status, report the status and write nothing. Report the
-/// status with [`cb_http_response_set_status`]; the body builders are
-/// ignored here, the bytes belong in `dest`.
-pub type cb_http_download_fn = Option<
-    unsafe extern "C" fn(
-        request: *const cb_http_request,
-        dest: *const c_char,
         response: *mut cb_http_response,
         user: *mut c_void,
     ),
@@ -281,7 +269,7 @@ pub unsafe extern "C" fn cb_http_response_fail(
 
 /// Fetch through the host's networking instead of the bundled transport.
 ///
-/// `get` is required; `download` and `finalize` may be null. `user` is
+/// `get` is required; `finalize` may be null. `user` is
 /// handed back to every callback untouched. **The transport owns `user`
 /// from this call on**: `finalize` runs exactly once — when the config is
 /// freed unopened, when the last session holding the transport closes,
@@ -305,7 +293,6 @@ pub unsafe extern "C" fn cb_http_response_fail(
 pub unsafe extern "C" fn cb_config_set_http_transport(
     config: *mut cb_config,
     get: cb_http_get_fn,
-    download: cb_http_download_fn,
     finalize: cb_http_finalize_fn,
     user: *mut c_void,
 ) -> cb_status {
@@ -334,7 +321,6 @@ pub unsafe extern "C" fn cb_config_set_http_transport(
         {
             config.inner.transport = Some(std::sync::Arc::new(host::HostTransport {
                 get,
-                download,
                 finalize,
                 user: user as usize,
             }));
@@ -342,7 +328,7 @@ pub unsafe extern "C" fn cb_config_set_http_transport(
         }
         #[cfg(not(feature = "opds"))]
         {
-            let (_, _, _) = (config, get, download);
+            let (_, _) = (config, get);
             decline(
                 cb_status::CB_ERR_FORMAT_NOT_BUILT,
                 "this build has no OPDS support, so a transport would have \
@@ -360,16 +346,14 @@ pub unsafe extern "C" fn cb_config_set_http_transport(
 pub(crate) mod host {
     use std::ffi::{c_void, CString};
     use std::io::Cursor;
-    use std::path::Path;
 
     use chapbook_reader::{HttpClient, HttpError, HttpRequest, HttpResponse};
 
-    use super::{cb_http_download_fn, cb_http_finalize_fn, cb_http_header, cb_http_request};
+    use super::{cb_http_finalize_fn, cb_http_header, cb_http_request};
 
     pub(crate) struct HostTransport {
         pub get:
             unsafe extern "C" fn(*const cb_http_request, *mut super::cb_http_response, *mut c_void),
-        pub download: cb_http_download_fn,
         pub finalize: cb_http_finalize_fn,
         /// The host's pointer, stored as an address so the compiler does
         /// not have to take our word for `Send + Sync` field by field.
@@ -461,32 +445,6 @@ pub(crate) mod host {
                 unsafe { (self.get)(raw, &mut response, self.user()) }
             })?;
             response.settle()
-        }
-
-        fn download(&self, request: HttpRequest, dest: &Path) -> Result<u16, HttpError> {
-            let Some(download) = self.download else {
-                // No host facility: the trait's own default — get, sibling
-                // temp file, rename — reached through a shim that only
-                // knows `get`, so the logic lives in one place.
-                struct ViaGet<'a>(&'a HostTransport);
-                impl HttpClient for ViaGet<'_> {
-                    fn get(&self, request: HttpRequest) -> Result<HttpResponse, HttpError> {
-                        self.0.get(request)
-                    }
-                }
-                return ViaGet(self).download(request, dest);
-            };
-            let dest: &str = dest
-                .to_str()
-                .ok_or_else(|| HttpError::new("destination path is not UTF-8"))?;
-            let dest =
-                CString::new(dest).map_err(|_| HttpError::new("destination path has a NUL"))?;
-            let mut response = super::cb_http_response::default();
-            with_c_request(&request, |raw| {
-                // SAFETY: as for `get`.
-                unsafe { download(raw, dest.as_ptr(), &mut response, self.user()) }
-            })?;
-            Ok(response.settle()?.status)
         }
     }
 }

@@ -101,7 +101,7 @@ internal static partial class Interop
 
     [LibraryImport(Library)]
     internal static partial Status cb_config_set_http_transport(
-        nint config, nint get, nint download, nint finalize, nint user);
+        nint config, nint get, nint finalize, nint user);
 
     // ---- The response a transport builds ----
 
@@ -373,6 +373,10 @@ internal static partial class Interop
     internal static partial Status cb_library_set_finished(
         nint library, long book, byte finished);
 
+    [LibraryImport(Library, StringMarshalling = StringMarshalling.Utf8)]
+    internal static partial Status cb_library_import_file(
+        nint library, string path, out long book);
+
     [LibraryImport(Library)]
     internal static partial Status cb_session_book_id(nint session, out long book);
 
@@ -580,7 +584,7 @@ internal static partial class Interop
 
     [LibraryImport(Library)]
     internal static partial Status cb_catalog_open(
-        nint get, nint download, nint finalize, nint user, out nint catalog);
+        nint get, nint finalize, nint user, out nint catalog);
 
     [LibraryImport(Library)]
     internal static partial void cb_catalog_close(nint catalog);
