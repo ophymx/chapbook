@@ -97,11 +97,21 @@ pub type cb_http_get_fn = Option<
     ),
 >;
 
-/// Fetches straight to a file — optional, for a host that owns a download
-/// facility worth having (an iOS background `URLSession`, Android's
-/// WorkManager, both of which continue a transfer after the process is
-/// suspended). Null means the engine streams through the get callback and
-/// writes the file itself.
+/// Fetches straight to a file — optional, for a host whose own
+/// fetch-to-file beats streaming through the get callback: the system
+/// trust store and cookie jar, a temp file the platform already manages,
+/// resume within a session. Null means the engine streams through the get
+/// callback and writes the file itself.
+///
+/// Not background transfer. Like every callback in this ABI it must block
+/// until the transfer settles, which is the one thing a transfer
+/// outliving its process does not do — an iOS background `URLSession`
+/// wants a delegate and refuses completion-handler tasks, and
+/// `WorkManager` is a job scheduler. A download meant to survive
+/// suspension is the host's to own end to end: it has an identity, it
+/// reports progress, and it finishes by waking the app rather than by
+/// returning. This callback cannot express any of that, and a host that
+/// needs it should not reach for this.
 ///
 /// The promise an implementation must keep: `dest` either ends up
 /// complete or is not created — no partial file under the final name. On

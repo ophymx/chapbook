@@ -179,11 +179,28 @@ pub trait HttpClient: Send + Sync {
     /// a half-written book; on a non-2xx status it writes nothing and just
     /// reports the status.
     ///
-    /// Override it when the host owns a download facility worth having —
-    /// an iOS background `URLSession` or Android's `WorkManager` continue a
-    /// transfer after the process is suspended, which no amount of Rust can
-    /// reproduce. An override must keep the same promise: `dest` either
-    /// ends up complete or is not created.
+    /// Override it when the host's own fetch-to-file beats streaming
+    /// `get` — the system trust store and cookie jar, a temp file the
+    /// platform already manages, resume within a session. An override must
+    /// keep the same promise: `dest` either ends up complete or is not
+    /// created.
+    ///
+    /// ## This is not background transfer, and cannot be
+    ///
+    /// The signature blocks until the transfer settles, so an
+    /// implementation holds a thread for the whole download — which is
+    /// precisely what a transfer outliving its process does not do. iOS
+    /// makes the contradiction concrete: a background `URLSession`
+    /// requires a delegate and refuses completion-handler tasks, so a
+    /// blocking override can only drive a foreground session, and a
+    /// foreground session dies when the app suspends. `WorkManager` is a
+    /// job scheduler and the same argument applies to it.
+    ///
+    /// A transfer that survives suspension is a job, not a call: it has an
+    /// identity, it reports progress, and it finishes by waking the app
+    /// rather than by returning. Serving that means handing the host the
+    /// request and taking the finished file back from it — not overriding
+    /// this method.
     fn download(&self, request: HttpRequest, dest: &Path) -> Result<u16, HttpError> {
         let mut response = self.get(request)?;
         if !(200..300).contains(&response.status) {
