@@ -37,6 +37,8 @@ jobs:
           toolchain: ${{ env.RUST_PIN }}
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets
       - run: cargo test --workspace
@@ -63,6 +65,8 @@ jobs:
             aarch64-linux-android,
             aarch64-apple-ios
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo check -p chapbook-core --target armv7-unknown-linux-gnueabihf
       - run: cargo check -p chapbook-core --target aarch64-unknown-linux-gnu
       # The two device platforms, against the crate that carries the font
@@ -108,6 +112,8 @@ jobs:
           toolchain: ${{ env.RUST_PIN }}
           components: clippy
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo clippy --workspace --all-targets
       - run: cargo test --workspace
       # The .NET binding under `windows/`, which is the other thing only a
@@ -187,6 +193,8 @@ jobs:
             aarch64-apple-ios-sim,
             aarch64-apple-darwin
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       # Three release staticlibs, then the XCFramework around them. The
       # slow step by a wide margin — stylo compiled once per slice — and
       # the reason the cache above earns its place here more than anywhere.
@@ -228,35 +236,46 @@ jobs:
     # with no library, and those bodies are compiled nowhere else. A
     # decline path that stopped compiling would reach a host as a build
     # failure in their project, not ours.
+    #
+    # A loop in one job rather than a ten-leg matrix, and the reason is the
+    # cache. `Swatinem/rust-cache` keys on `GITHUB_JOB`, never on the matrix
+    # context, so all ten legs collided on one entry: on any miss all ten
+    # fetched the registry cold, nine then lost the save race outright
+    # ("Unable to reserve cache ... another job may be creating this cache"),
+    # and the tenth left behind a `target/` built for whichever feature set
+    # happened to finish first — which is useless to the other nine, since a
+    # different feature set is a different set of artifacts. One job shares
+    # one registry and one `target/`, and there the sharing is real: cargo
+    # keeps every feature set's artifacts side by side, so each configuration
+    # after the first only rebuilds what its own features changed.
+    #
+    # What it costs is ten check names in the PR status list, collapsed into
+    # one. The echo before each pair is what replaces them: a failure names
+    # its configuration on the line above the error.
     name: check (chapbook-reader and the C ABI, feature matrix)
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        features:
-          - ""
-          - "library"
-          - "cbz"
-          - "pdf"
-          - "opds"
-          - "opds,ureq"
-          - "cbz,pdf"
-          - "cbz,opds"
-          - "pdf,opds"
-          - "library,cbz,pdf"
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ env.RUST_PIN }}
       - uses: Swatinem/rust-cache@v2
-      - run: cargo check -p chapbook-reader --no-default-features --features "${{ matrix.features }}"
-      - run: cargo check -p chapbook-ffi --no-default-features --features "${{ matrix.features }}"
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: check every feature configuration
+        run: |
+          set -euo pipefail
+          for features in "" library cbz pdf opds "opds,ureq" "cbz,pdf" \
+                          "cbz,opds" "pdf,opds" "library,cbz,pdf"; do
+            echo "=== --no-default-features --features \"$features\""
+            cargo check -p chapbook-reader --no-default-features --features "$features"
+            cargo check -p chapbook-ffi --no-default-features --features "$features"
+          done
       # `sync` is the C ABI's own feature — chapbook-reader has no such
-      # switch — so it gets its own line rather than a matrix row the
+      # switch — so it gets its own line rather than a loop iteration the
       # reader check would refuse. Without `ureq`, which is the device
       # shape: sync over the host's transport, no TLS stack in the build.
       - run: cargo check -p chapbook-ffi --no-default-features --features sync
-        if: matrix.features == ''
 
   progression-feature:
     # OPDS Progression 1.0 is off by default because the spec is an
@@ -278,6 +297,8 @@ jobs:
           toolchain: ${{ env.RUST_PIN }}
           components: clippy
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo clippy -p opds-client --all-targets --features progression
       - run: cargo clippy -p opds-client --all-targets --no-default-features --features progression
       - run: cargo test -p opds-client --features progression
@@ -302,6 +323,8 @@ jobs:
           toolchain: ${{ env.RUST_PIN }}
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo check -p chapbook-reader --no-default-features --target wasm32-unknown-unknown
 
   licenses:
@@ -310,13 +333,42 @@ jobs:
     # NOTICE records where and why. This job exists so a dependency bump
     # cannot widen that set without somebody deciding to; the allow-list in
     # deny.toml is the decision record.
+    #
+    # cargo-deny on the host, not in `cargo-deny-action`'s container. The
+    # container cannot see the runner's `~/.cargo`, so it was the one job
+    # that refetched all 618 crates on every run however warm the rest of CI
+    # was — `cargo metadata` needs each package's own manifest for the
+    # `license` field, so the whole graph comes down — and it refetched a
+    # whole 1.98 toolchain besides, because the image ships 1.85 and
+    # rust-toolchain.toml outranks it.
+    #
+    # `cache-targets: false` because cargo-deny compiles nothing, so this
+    # entry is the registry alone — a couple of hundred MB against the ~800
+    # a workspace target dir would add. `shared-key` only names it for what
+    # it holds; it drops the job id from the key, which is the honest
+    # spelling for an entry that is not this job's build.
+    #
+    # `--all-features` is what the action defaulted to and is the right
+    # reading for a license gate: an optional dependency's terms bind a host
+    # who turns it on.
     name: licenses (cargo-deny)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: EmbarkStudios/cargo-deny-action@v2
+      - uses: dtolnay/rust-toolchain@master
         with:
-          command: check licenses
+          toolchain: ${{ env.RUST_PIN }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-targets: false
+          shared-key: registry
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      # Pinned, for the reason RUST_PIN is: the container pinned 0.20.2 and a
+      # floating lint tool turns the repo red with no commit behind it.
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny@0.20.2
+      - run: cargo deny --all-features check licenses
 
   msrv:
     name: build (MSRV 1.92)
@@ -329,6 +381,8 @@ jobs:
         with:
           toolchain: ${{ env.MSRV }}
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       # RUSTUP_TOOLCHAIN, not just the installed default: rust-toolchain.toml
       # outranks `rustup default`, so without this the job silently rebuilt on
       # the pinned stable and proved nothing about the MSRV.
