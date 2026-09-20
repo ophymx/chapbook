@@ -104,12 +104,13 @@ of custody is holding the bookmark that reaches the file again.
 `Catalog` is where a phone's books come from: `fetch(_:)` a root,
 `entries()` to draw the rows, a navigation row's `href` to drill in,
 `facets()` and the page URLs for a long feed's chrome, `search(_:)`
-where `hasSearch()` says there is one — and `download(_:into:)`, which
-is the call the class exists for. It fetches the acquisition, imports it
-into the library at the directory the sessions use, **records the sync
-services the entry advertises**, and answers with the `Library.Book`
-row it became. Those services live in the catalog entry and nowhere
-else, so a book added any other way is one that will never reconcile.
+where `hasSearch()` says there is one — and two ways to get a book onto
+the shelf. `download(_:into:)` is the short one: it fetches the
+acquisition, imports it into the library at the directory the sessions
+use, **records the sync services the entry advertises**, and answers
+with the `Library.Book` row it became. Those services live in the
+catalog entry and nowhere else, so a book added any other way is one
+that will never reconcile.
 Every call that touches the network blocks; run them off the main actor
 in a `Task` whose cancellation is the app's own, because the binding
 invents no worker of its own. A 401 is an answer, not a failure: the
@@ -120,10 +121,40 @@ submits, and the fetch is simply tried again. Images cross as URLs,
 never bytes — a cover grid is what the platform's image loader is for,
 sending the same `Authorization` if the catalog wants one.
 
+**`download(_:into:)` is the wrong call for a book on a phone**, and
+the second door is the reason. The whole transfer happens inside that
+call, so the process has to stay alive for it — and no transport rescues
+that, because a background `URLSession` refuses completion-handler tasks
+and wants a delegate, precisely because a transfer that survives
+suspension is a job rather than a call. Use it for a tap the reader is
+watching; use the other door for anything that has to outlive the
+screen. `downloadRequest(_:)` hands back a `Catalog.DownloadRequest`
+describing one fetch and steps aside: `urlRequest` is what you give a
+background session, and when the file lands, `Library.importFile(at:)`
+puts it on the shelf and `Library.setSyncTargets` records its
+services. That is the same work
+`download(_:into:)` does, taken apart — which is exactly why the
+services have to be read **before** the transfer starts: they live in
+the catalog entry, and by the time a background download lands the feed
+is usually gone. Describing costs nothing and touches no network, so
+build the request while the feed is open even if the transfer is
+queued for later. The request is `Codable` for the same reason — a
+`URLSessionTask` has one `taskDescription` to carry it through a process
+restart. It deliberately carries **no credential**: the app opened this
+catalog, so it already knows which one the catalog takes, and adding the
+header when the transfer starts keeps the secret out of a persisted task
+description and makes a token rotated in between simply fresh. Every
+other field is advice — rename the file, add headers, the engine reads a
+book by its bytes. `importFile(at:)` does not consume the file it is
+given (that one is the platform's), and importing the same bytes twice
+answers with the row they already have, so a retried job needs no
+bookkeeping of its own.
+
 `SyncWorker` reconciles the shelf with a book's services — the position
 with its OPDS Progression endpoint, marks with its Web Annotation
 container — recorded per book by `Catalog.download`, or by
-`Library.setSyncTargets` for a book that arrived some other way. The
+`Library.setSyncTargets` for a book that arrived any other way,
+including a download the app ran itself. The
 transport is the same choice a `SessionConfiguration` makes, with the
 same default (`URLSession` on iOS, so requests honor ATS, the trust
 store and the app's own configuration), plus the write half sync turns
@@ -242,8 +273,12 @@ What is settled, and what still needs a physical device.
   bookmark revocation (file moved or deleted underneath a stored
   bookmark), iCloud placeholders — a file that is legal, named,
   and not yet downloaded, where acquiring the descriptor can fail or
-  block for reasons the engine must not try to interpret — and a live
-  VoiceOver pass over the iOS element list. The macOS accessibility
+  block for reasons the engine must not try to interpret — a background
+  `URLSession` actually surviving suspension, since `swift test` asserts
+  that a `DownloadRequest` crosses intact and that `importFile(at:)`
+  shelves what comes back, but nothing here can suspend a process and
+  wake its delegate — and a live VoiceOver pass over the iOS element
+  list. The macOS accessibility
   half is asserted by `swift test` (value, ranges, extents, the word
   under a point); the iOS half compiles and mirrors the
   emulator-verified Android tree, but no screen reader has walked it

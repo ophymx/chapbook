@@ -134,3 +134,112 @@ private func stocked(_ name: String) throws -> URL {
     try library.delete(book: id)
     #expect(try library.books().isEmpty)
 }
+
+// MARK: A download the app ran itself, coming back
+
+// `importFile(at:)` is the completing half of a transfer that ran under
+// the platform's own job system rather than inside a blocking call. The
+// properties below are the ones a background download leans on, and this
+// is the only place they are exercised from Swift.
+
+/// Stage a copy of a fixture under `name`, as a finished transfer would
+/// have left it. Returns where it landed.
+private func handedOver(_ fixture: String, as name: String, in dir: URL) throws -> URL {
+    let destination = dir.appendingPathComponent(name)
+    try FileManager.default.copyItem(
+        at: fixtures.appendingPathComponent(fixture), to: destination)
+    return destination
+}
+
+@Test func aFileTheAppFetchedItselfIsShelvedWithoutBeingConsumed() throws {
+    let dir = try scratch("import")
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let library = try Library(directory: dir)
+
+    // The name a background `URLSession` actually produces: a temp file
+    // under an opaque name, no extension anywhere. The format is read
+    // from the bytes, so it shelves regardless.
+    let source = try handedOver(
+        "epub/minimal.epub", as: "CFNetworkDownload_a8Kq2p", in: dir)
+    let book = try library.importFile(at: source)
+    #expect(book > 0, "the import answers with its library row")
+
+    let shelved = try library.books()
+    #expect(shelved.count == 1)
+    #expect(shelved.first?.id == book)
+    #expect(shelved.first?.fingerprint.isEmpty == false)
+
+    // The source belongs to whoever passed it — a `URLSession` temp file,
+    // a document-browser pick — so the library copies and never reaches
+    // into the host's storage to clean up. `Catalog.download(_:into:)`
+    // removes its staging file because it made that file itself; this is
+    // the opposite case, and the difference is the whole distinction.
+    #expect(FileManager.default.fileExists(atPath: source.path))
+    #expect(shelved.first?.fileURL?.path != source.path)
+}
+
+@Test func importingTheSameBytesTwiceAnswersWithTheSameRow() throws {
+    let dir = try scratch("import-retry")
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let library = try Library(directory: dir)
+
+    // A different path and a different name, because a job system that
+    // retries rarely lands the bytes in the same place twice.
+    let first = try handedOver("epub/minimal.epub", as: "attempt-1.epub", in: dir)
+    let second = try handedOver("epub/minimal.epub", as: "attempt-2", in: dir)
+
+    let book = try library.importFile(at: first)
+    let again = try library.importFile(at: second)
+
+    // Books are identified by a fingerprint of their bytes, which is what
+    // lets a `URLSession` completion delivered twice, or a worker the
+    // system restarted, stay correct without coordinating with the shelf.
+    #expect(book == again, "the same bytes are the same book")
+    #expect(try library.books().count == 1, "no duplicate row")
+}
+
+@Test func aFinishedDownloadIsShelvedThenGivenTheServicesItsFeedCarried() throws {
+    let dir = try scratch("import-sync")
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let library = try Library(directory: dir)
+
+    // The documented completion, in order: the file first, then the two
+    // services — which came from the catalog entry, captured before the
+    // transfer, because the feed is usually gone by the time it lands.
+    let source = try handedOver("epub/minimal.epub", as: "landed", in: dir)
+    let book = try library.importFile(at: source)
+    let progression = URL(string: "http://catalog.test/sync/position/v3")!
+    let container = URL(string: "http://catalog.test/sync/annotations/v3")!
+    try library.setSyncTargets(
+        book: book, progressionURL: progression, annotationContainer: container)
+
+    // Sync services are not in the file, so nothing but this call could
+    // have put them there. A book that skipped it is one that will never
+    // reconcile, which is the failure this ordering exists to prevent.
+    #expect(library.syncProgressionURL(book: book) == progression)
+    #expect(library.syncAnnotationContainer(book: book) == container)
+}
+
+@Test func importingSomethingThatIsNotABookFailsInsteadOfCrashing() throws {
+    let dir = try scratch("import-junk")
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let library = try Library(directory: dir)
+
+    // A truncated transfer is an ordinary outcome for a background job,
+    // and the host has to be able to tell the difference between "retry"
+    // and a crash.
+    let junk = dir.appendingPathComponent("truncated.epub")
+    try Data("not a book".utf8).write(to: junk)
+
+    #expect(throws: ChapbookError.self) {
+        try library.importFile(at: junk)
+    }
+    #expect(try library.books().isEmpty, "nothing half-shelved")
+
+    // A path with no file behind it is the other half of the same
+    // question — a completion handler handed a URL the system already
+    // cleaned up.
+    #expect(throws: ChapbookError.self) {
+        try library.importFile(at: dir.appendingPathComponent("never-existed.epub"))
+    }
+}
