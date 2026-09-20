@@ -82,6 +82,17 @@
 //! The full contract, with the server survey behind it, is this crate's
 //! `INTEROP.md`.
 //!
+//! # Downloading a book
+//!
+//! Two doors, and the choice is about who owns the transfer rather than
+//! about convenience. [`OpdsClient::download`] fetches an acquisition
+//! through the injected transport and returns once the file is on disk,
+//! which is right for a desktop process. [`Entry::download_request`]
+//! instead describes the fetch and steps aside, so the host can run it
+//! under `WorkManager` or a background `URLSession` and have it survive the
+//! app being suspended — something no blocking call can do, however the
+//! transport is implemented. See the [`download`] module.
+//!
 //! # Position sync
 //!
 //! [`progression`] speaks OPDS Progression 1.0 — reading and writing where
@@ -91,6 +102,7 @@
 
 mod atom;
 mod client;
+pub mod download;
 mod href;
 pub mod http;
 mod model;
@@ -104,6 +116,7 @@ pub use atom::parse_atom;
 pub use client::{
     basic_authorization, expand_search_template, opensearch_template, pse_page_url, OpdsClient,
 };
+pub use download::DownloadRequest;
 pub use href::resolve_url;
 pub use http::{HttpClient, HttpError, HttpRequest, HttpResponse};
 pub use model::{

@@ -120,8 +120,18 @@ impl OpdsClient {
     /// Download an acquisition to `dest`, complete or not at all. No Range
     /// resume is assumed — an interrupted download restarts.
     ///
-    /// The transport does the writing (see [`HttpClient::download`]), so a
-    /// host with a background download facility gets to use it.
+    /// This blocks until the transfer settles, holding a thread for the
+    /// whole of it, which is right for a desktop process and wrong for a
+    /// transfer that has to outlive the app going to the background. For
+    /// that, hand the job over instead of making the call:
+    /// [`Entry::download_request`](crate::Entry::download_request)
+    /// describes the fetch and the host performs it. The
+    /// [`download`](crate::download) module has the trade in full.
+    ///
+    /// The injected transport may still do the writing here — see
+    /// [`HttpClient::download`], worth overriding when the host's own
+    /// fetch-to-file avoids buffering a whole book in memory on the way
+    /// through.
     pub fn download(&self, url: &str, dest: &Path) -> Result<(), OpdsError> {
         let status = self
             .http
