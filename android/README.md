@@ -94,15 +94,44 @@ quarter of `ActivityManager.memoryClass`, halved on a real
 `onTrimMemory` warning, and `releaseCaches` follows every warning.
 `suspend` runs from `ON_STOP`, the last callback Android guarantees.
 
+**The reader's chrome** is a title bar and a bottom bar the middle band
+toggles, and four sheets off the bottom bar: contents (flattened, with
+depth; the current unit bold; headings that link nowhere kept for their
+children), search (unit by unit on the main thread, yielding between
+units — the blocking whole-book call would want a worker, and a worker
+would touch the session while the page draws; a hit jumps and stays
+selected), marks (bookmark this page; every mark with its progression;
+delete), and settings (text size, line height, justify, publisher
+styles, theme, typeface, scoped to this book or to every book, and a
+reset). The title bar shows *Return* only while the engine's Back has
+somewhere to go. A long press selects the word under the finger and the
+drag that follows extends it; the engine paints the selection and the
+view draws the handles, which drag by re-anchoring at the other end. An
+action bar floats beside the selection: highlight, note, copy. A tap on
+a stored highlight opens a colour menu with a remove. A tap runs the
+contract's three hit tests in order — link, highlight, band — and an
+`http(s)` link the engine declines goes to a browser. A pinch zooms an
+image book around the fingers and steps the text size on prose. Back
+peels one layer at a time: sheet, selection, chrome, book.
+
 Verified on a Pixel 6 Pro (Android 17): the shelf with covers, search,
 sort and state filters; a book in through the `VIEW` intent; page turns
 by tap, fling and volume key, one page per input; the chrome toggling
 from the middle band; position restored across close and reopen;
-rotation keeping the book open; home, a memory trim and return; and
-`ShelfModelTest` (5) plus the library module's tests (7) through
-`connectedDebugAndroidTest`. Not yet built: reader chrome beyond the
-title bar (contents, settings, marks, selection, search), the catalog,
-downloads and sync — the phases that follow.
+rotation keeping the book open; home, a memory trim and return; a
+contents jump and the Return that follows it; sepia and a larger size
+from the settings sheet; a long-pressed word highlighted, recoloured
+from its menu, listed in marks, and given a note; search for a word
+with its matches bold and a hit selected on its page; the page's text
+runs in the accessibility tree with geometry. `ShelfModelTest` (5),
+`ReaderFlowTest` (3) and the library module's tests (7) run through
+`connectedDebugAndroidTest`. Not exercised by that drive, because `adb
+input` has no second finger and the fixture has no external link: the
+pinch and the browser hand-off. Note that a `connected*AndroidTest` run
+uninstalls the app afterwards and takes its data with it — an empty
+shelf after a test run is that, not a bug.
+
+Not yet built: the catalog, downloads and sync — the phases that follow.
 
 The app's dependencies are pinned to the last releases built against
 `compileSdk 36`: everything after mid-2026 wants `compileSdk 37` and
