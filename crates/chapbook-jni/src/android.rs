@@ -310,6 +310,37 @@ pub extern "system" fn Java_com_ophymx_chapbook_Native_cacheBudget(
     }
 }
 
+/// Say how much the caches may hold. The engine's default is sized for a
+/// desktop; a phone says its own number from `ActivityManager.memoryClass`
+/// and lowers it from `onTrimMemory`, which evicts immediately rather than
+/// at the next page turn. The unit on screen is never evicted.
+#[no_mangle]
+pub extern "system" fn Java_com_ophymx_chapbook_Native_setCacheBudget(
+    _env: JNIEnv,
+    _class: JClass,
+    handle: jlong,
+    bytes: jlong,
+) {
+    if let Some(s) = unsafe { session(handle) } {
+        s.set_cache_budget(bytes.max(0) as usize);
+    }
+}
+
+/// Persist the reading position without giving anything up. `suspend`
+/// does this too, but only on the way out; a sync that wants the latest
+/// position, or a shell leaving a book for another screen, wants it on
+/// its own.
+#[no_mangle]
+pub extern "system" fn Java_com_ophymx_chapbook_Native_savePosition(
+    _env: JNIEnv,
+    _class: JClass,
+    handle: jlong,
+) {
+    if let Some(s) = unsafe { session(handle) } {
+        s.save_position();
+    }
+}
+
 // ---- Layout and navigation ----
 
 #[no_mangle]

@@ -233,7 +233,18 @@ class Session private constructor(private var handle: Long) : AutoCloseable {
         }
 
     val cacheBytes: Long get() = Native.cacheBytes(handle)
-    val cacheBudget: Long get() = Native.cacheBudget(handle)
+
+    /**
+     * How much the caches may hold, in bytes. The engine's default is
+     * sized for a desktop and too generous for a phone: say your own
+     * number — a quarter of `ActivityManager.memoryClass` is a fair
+     * start — and lower it from `onTrimMemory`, which evicts at once
+     * rather than at the next page turn. The page on screen is never
+     * evicted, so the only cost of a small budget is a slower page-back.
+     */
+    var cacheBudget: Long
+        get() = Native.cacheBudget(handle)
+        set(bytes) = Native.setCacheBudget(handle, bytes)
 
     fun setMetrics(width: Float, height: Float, margin: Float, scale: Float) =
         Native.setMetrics(handle, width, height, margin, scale)
@@ -555,6 +566,13 @@ class Session private constructor(private var handle: Long) : AutoCloseable {
             )
         }
     }
+
+    /**
+     * Save the position and keep everything. [suspend] does this on the
+     * way out; call this on its own before a sync reads the position, or
+     * when the reader leaves the book for another screen and may be back.
+     */
+    fun savePosition() = Native.savePosition(handle)
 
     /**
      * Save the position and drop everything reconstructible. Call from

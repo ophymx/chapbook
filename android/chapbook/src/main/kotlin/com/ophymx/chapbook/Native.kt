@@ -34,6 +34,8 @@ internal object Native {
     external fun releaseCaches(handle: Long)
     external fun cacheBytes(handle: Long): Long
     external fun cacheBudget(handle: Long): Long
+    external fun setCacheBudget(handle: Long, bytes: Long)
+    external fun savePosition(handle: Long)
     external fun setMetrics(handle: Long, width: Float, height: Float, margin: Float, scale: Float)
     external fun nextPage(handle: Long): Boolean
     external fun prevPage(handle: Long): Boolean
