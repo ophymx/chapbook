@@ -12,7 +12,10 @@ import com.ophymx.chapbook.ReadingState
 import com.ophymx.chapbook.Sort
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
@@ -36,12 +39,27 @@ enum class Notice { OpenFailed }
  * desktop app and the CLI answer too — a shelf opens on the book the
  * reader was in.
  */
-class ShelfViewModel(private val shelf: Shelf, private val opener: Opener) : ViewModel() {
+class ShelfViewModel(
+    private val shelf: Shelf,
+    private val opener: Opener,
+    private val downloads: Downloads,
+) : ViewModel() {
     private val _state = MutableStateFlow(ShelfState())
     val state: StateFlow<ShelfState> = _state.asStateFlow()
 
+    /** How many downloads are running or blocked, for a shelf badge. */
+    val downloading: StateFlow<Int> = downloads.status()
+        .map { infos -> infos.count { !it.state.isFinished } }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0)
+
     init {
         refresh()
+        // A download that lands adds a book; the shelf follows it.
+        viewModelScope.launch {
+            downloads.status().collect { infos ->
+                if (infos.any { it.state == androidx.work.WorkInfo.State.SUCCEEDED }) refresh()
+            }
+        }
     }
 
     fun refresh() {
@@ -100,7 +118,7 @@ class ShelfViewModel(private val shelf: Shelf, private val opener: Opener) : Vie
 
     companion object {
         fun factory(container: AppContainer): ViewModelProvider.Factory = viewModelFactory {
-            initializer { ShelfViewModel(container.shelf, container.opener) }
+            initializer { ShelfViewModel(container.shelf, container.opener, container.downloads) }
         }
     }
 }

@@ -53,9 +53,18 @@ dependencies {
     implementation("androidx.navigation:navigation-compose:2.9.8")
     implementation("androidx.core:core-ktx:1.18.0")
     implementation("io.coil-kt.coil3:coil-compose:3.5.0")
+    implementation("io.coil-kt.coil3:coil-network-okhttp:3.5.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.11.0")
+    // The app's networking: the catalog, downloads and covers all go
+    // through one client, which is where credentials are attached and
+    // where the device's trust store is consulted. No Rust TLS ships.
+    implementation("com.squareup.okhttp3:okhttp:5.4.0")
+    // A transfer that must survive the app being suspended is a job.
+    implementation("androidx.work:work-runtime-ktx:2.10.5")
 
     androidTestImplementation("androidx.test:runner:1.6.2")
+    androidTestImplementation("androidx.work:work-testing:2.10.5")
+    androidTestImplementation("com.squareup.okhttp3:mockwebserver3:5.4.0")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
     androidTestImplementation("junit:junit:4.13.2")
 }
@@ -64,7 +73,7 @@ dependencies {
 // into the test APK the way the library module stages its fixtures.
 val stageTestFixtures by tasks.registering(Copy::class) {
     from(rootProject.file("../fixtures")) {
-        include("epub/minimal.epub", "epub/series.epub", "cbz/minimal.cbz")
+        include("epub/minimal.epub", "epub/series.epub", "cbz/minimal.cbz", "opds/navigation.atom.xml", "opds/acquisition.atom.xml", "opds/acquisition-sync.atom.xml", "opds/authentication.opds-auth.json")
     }
     into(layout.buildDirectory.dir("staged-test-assets"))
 }

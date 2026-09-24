@@ -41,7 +41,7 @@ dependencies {
 // into git a second time — the demo does the same for its book.
 val stageTestFixtures by tasks.registering(Copy::class) {
     from(rootProject.file("../fixtures")) {
-        include("opds/navigation.atom.xml", "opds/acquisition-sync.atom.xml", "epub/minimal.epub")
+        include("opds/navigation.atom.xml", "opds/acquisition.atom.xml", "opds/acquisition-sync.atom.xml", "epub/minimal.epub")
     }
     into(layout.buildDirectory.dir("staged-test-assets"))
 }

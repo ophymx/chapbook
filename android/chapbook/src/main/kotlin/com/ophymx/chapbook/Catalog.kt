@@ -70,6 +70,26 @@ data class DownloadRequest(
     val annotationContainer: String?,
 )
 
+/**
+ * One way to narrow the held feed, as the catalog offers it.
+ *
+ * Facets come in groups — "Language", "Sort by" — and the facets of a
+ * group are alternatives, so a browse screen draws one control per
+ * [group] with [active] marking the one in force. [href] is a feed:
+ * hand it to [Catalog.fetch].
+ */
+data class Facet(
+    val index: Int,
+    val label: String,
+    /** The group's name, and its position among the groups. */
+    val group: String,
+    val groupIndex: Int,
+    val href: String,
+    val active: Boolean,
+    /** How many entries it would show, when the catalog says. */
+    val count: Long?,
+)
+
 /** Why a catalog call did not succeed. */
 sealed class CatalogError : Exception() {
     /** The network failed, or the catalog answered something unusable. */
@@ -156,6 +176,23 @@ class Catalog(transport: SyncTransport) : AutoCloseable {
                 isOpenAccess = flags[3] != 0L,
                 syncsPosition = flags[6] != 0L,
                 syncsAnnotations = flags[7] != 0L,
+            )
+        }
+    }
+
+    /** The held feed's facets, in feed order, grouped as the catalog groups them. */
+    fun facets(): List<Facet> {
+        val flat = Native.catalogFacets(handle)
+        return (0 until flat.size / 4).mapNotNull { index ->
+            val base = index * 4
+            Facet(
+                index = index,
+                label = Native.catalogFacetText(handle, index, 0) ?: return@mapNotNull null,
+                group = Native.catalogFacetText(handle, index, 1) ?: "",
+                groupIndex = flat[base].toInt(),
+                href = Native.catalogFacetText(handle, index, 2) ?: return@mapNotNull null,
+                active = flat[base + 1] != 0L,
+                count = flat[base + 2].takeIf { flat[base + 3] != 0L },
             )
         }
     }

@@ -131,7 +131,46 @@ pinch and the browser hand-off. Note that a `connected*AndroidTest` run
 uninstalls the app afterwards and takes its data with it — an empty
 shelf after a test run is that, not a bug.
 
-Not yet built: the catalog, downloads and sync — the phases that follow.
+**The catalog** (`ui/CatalogScreen.kt`, `model/Catalog*.kt`) browses OPDS
+over the app's own OkHttp client — the same one that loads covers and, in
+a later phase, drives sync. A saved-catalogs list adds and removes
+catalogs by URL; opening one browses it feed by feed, a navigation row
+pushing a crumb and Back walking them before it leaves the screen. Facets
+cross grouped as the catalog groups them (one control per group, the
+facets of a group alternatives), paging is infinite scroll off the feed's
+`next` link, and search is the feed's own. A publication's **Get** enqueues
+a `WorkManager` job — the background-download flow the binding already
+had a test for: describe the fetch off the entry while the feed is open,
+run it as a foreground job with a progress notification, import the file,
+record the two sync services. The shelf shows a downloaded book the
+moment its job succeeds. A 401 becomes a login form drawn from the
+catalog's authentication document; signing in stores the credential in
+the **Keystore**, keyed by origin (never a catalog URL, whose path may be
+a secret), and OkHttp attaches it per request — so a token is added when
+a transfer runs, not persisted in `WorkManager`'s input, and the trust
+store stays the device's because no Rust TLS ships. Cleartext is allowed
+only for `localhost` and the emulator's host alias, for a dev server
+reached through `adb reverse`.
+
+Binding: the Kotlin `Catalog` gained `facets()` over two new JNI entry
+points (`catalogFacets`, `catalogFacetText`), which flatten the feed's
+facet groups the C ABI already carried.
+
+Verified against a live OPDS server (mocklib, and by extension any real
+one) reached from the Pixel through `adb reverse`: browse, facets,
+paging, covers, a download landing on the shelf, and — against an
+auth-required instance — a 401 becoming a login and a sign-in reaching
+the feed. Device tests: `CatalogFacetsTest` in the library module (facets
+grouped and resolved) and `CatalogModelTest` in the app (origin parsing,
+a Keystore credential round-trip, the OkHttp transport meeting the
+engine's contract against a `MockWebServer`).
+
+Toolchain: OkHttp is pinned to 5.4.0, the last release built for
+`compileSdk 36`; 5.5 wants 37, part of the same deferred toolchain move
+the AndroidX line is pinned around.
+
+Not yet built: sync, then polish and an emulator CI job — the phases that
+follow.
 
 The app's dependencies are pinned to the last releases built against
 `compileSdk 36`: everything after mid-2026 wants `compileSdk 37` and

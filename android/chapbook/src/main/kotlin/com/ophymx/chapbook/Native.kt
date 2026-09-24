@@ -134,6 +134,8 @@ internal object Native {
     external fun catalogDownload(handle: Long, index: Int, libraryDir: String): Long
     external fun catalogAuthTitle(handle: Long): String?
     external fun catalogAuthOffersBasic(handle: Long): Boolean
+    external fun catalogFacets(handle: Long): LongArray
+    external fun catalogFacetText(handle: Long, index: Int, field: Int): String?
     external fun position(handle: Long): Long
     external fun title(handle: Long): String
     external fun renderSize(handle: Long): Long
