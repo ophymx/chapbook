@@ -24,8 +24,10 @@ rustup target add aarch64-linux-android x86_64-linux-android
 cargo install cargo-ndk
 
 export ANDROID_NDK_HOME=$HOME/Android/Sdk/ndk/<version>
+export ANDROID_HOME=$HOME/Android/Sdk
 ./android/build-jni.sh release
 cd android && ./gradlew :demo:assembleDebug
+./gradlew :chapbook:connectedDebugAndroidTest   # with a device or AVD attached
 ```
 
 Prerequisites that are not guessable:
@@ -74,6 +76,24 @@ Both produce a complete, installable app that dies on the device, and
   `System.loadLibrary`.
 - A drifted `external fun` name fails at first call — Kotlin and Rust
   never reference each other at compile time.
+
+What that check does not reach is whether a call *answers correctly*,
+and the one place that is asserted is `chapbook/src/androidTest`. It is
+instrumented rather than a JVM unit test because the `.so` links
+`libjnigraphics`, which no desktop JVM can load, so it runs on a device
+or the AVD (`connectedDebugAndroidTest`) and CI, having no emulator, does
+not run it. `DownloadFlowTest` pins the background-download flow taken
+apart — `Catalog.downloadRequest` → a `WorkManager` job the app runs →
+`Library.importFile` → `Library.setSyncTargets` — against the same
+fixtures and properties `swift test` pins for iOS: the URL crosses
+absolute, the id opaque, `Accept` alone with no `Authorization`, nothing
+fetched while describing, a navigation row answers null, an extensionless
+file shelves and is not consumed, the same bytes twice are one row, the
+services read back after the import, and junk fails instead of crashing.
+The navigation-row check is the one that catches the bug this class of
+test exists for: swap the download-URL field for the href and it fails.
+What no test here reaches is a worker actually surviving a suspended
+process; that is device-only and the platform's promise.
 
 ## Conventions worth keeping
 
