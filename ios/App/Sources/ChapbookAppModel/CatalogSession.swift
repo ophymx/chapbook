@@ -1,36 +1,39 @@
 import Chapbook
 import Foundation
 
-/// One open catalog, on the one thread it is allowed to be on.
+/// One catalog being browsed, on the one thread it is allowed to be on.
 ///
 /// Every `Catalog` call blocks and the handle is one thread's at a time,
 /// so a session owns a serial queue and hops every call onto it. The
-/// catalog is opened on that queue on first use, and the origin's
-/// credential is set on it before every fetch — read fresh each time, so
-/// a sign-in stored while a feed was open reaches the next request.
+/// catalog is opened on that queue on first use — through an `App` of
+/// this actor's own, so it browses over the app's transport and signs in
+/// through the app's credential store, which the engine reads before
+/// every fetch. `savedID` is `nil` for a catalog that has no saved row,
+/// a pasted URL.
 public actor CatalogSession {
-    private let transport: HTTPTransport
-    private let credentials: Credentials
+    private let platform: Platform
+    private let savedID: Int64?
     private let queue = DispatchSerialQueue(label: "chapbook-catalog")
+    private var app: App?
     private var catalog: Catalog?
 
     public nonisolated var unownedExecutor: UnownedSerialExecutor { queue.asUnownedSerialExecutor() }
 
-    public init(transport: HTTPTransport, credentials: Credentials) {
-        self.transport = transport
-        self.credentials = credentials
+    public init(platform: Platform, savedID: Int64?) {
+        self.platform = platform
+        self.savedID = savedID
     }
 
-    /// Run a block over the catalog, credentialed for `url`'s origin.
-    public func use<T: Sendable>(for url: URL, _ body: @Sendable (Catalog) throws -> T) throws -> T {
-        let catalog = try open()
-        try catalog.setAuthorization(credentials.authorization(for: url))
-        return try body(catalog)
+    /// Run a block over the catalog.
+    public func use<T: Sendable>(_ body: @Sendable (Catalog) throws -> T) throws -> T {
+        try body(try open())
     }
 
     private func open() throws -> Catalog {
         if let catalog { return catalog }
-        let opened = try Catalog(transport: transport)
+        let app = try self.app ?? platform.open()
+        self.app = app
+        let opened = try app.browse(savedID)
         catalog = opened
         return opened
     }

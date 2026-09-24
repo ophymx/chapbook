@@ -239,18 +239,28 @@ polling.
 
 ## The app
 
-`App/` is a reading application over the package, and its shape is
-`chapbook-app`'s one level up — and the Android app's exactly: everything
-that is not a widget lives in `App/Sources/ChapbookAppModel` — which books
-the shelf shows and in what order (recently read first, the same default
-as the desktop app and the CLI), how a file becomes a book, how a book is
-opened and found again, and the threads the engine's rules demand — and
-nothing in that module imports UIKit, so all of it runs under `swift test`
-on the macOS slice with no screen. The screens (`App/Sources/ChapbookApp`,
-SwiftUI, iOS 17) ask the model and draw, and only `App/build.sh` compiles
-them, because a `.app` is not something SwiftPM produces for iOS. The
-model is its own package so its tests join the CI gate the way the
-library's do; it depends on `../Chapbook` by path.
+`App/` is a reading application over the package. Its decisions are not
+its own: `Chapbook.App` in the package is `crates/chapbook-app` behind
+the `cb_app_*` calls of the C ABI — the application layer every front end
+shares (`docs/APP.md`), and the same code the Android app and the GTK
+desktop app run. It decides which books the shelf shows and in what
+order, how a file becomes a book and is found again, how a catalog is
+browsed, refused and signed into, what a landed download does, how much
+memory the page cache may take, and how sync is driven. What
+`App/Sources/ChapbookAppModel` keeps is the platform half — `Grants`
+turning a security-scoped bookmark into the opaque bytes the engine
+stores, `Credentials` as the Keychain-backed `CredentialStore` the engine
+signs in through, `URLSession` as the transport, `Opener` resolving a
+bookmark to a descriptor, `Downloads` over a background session — and
+the isolation the engine's rules demand: an `App` handle is one thread's,
+like a session, so the container opens one on the main actor for the
+questions a screen asks directly, one inside the shelf's actor, and one
+per catalog session. Nothing in that module imports UIKit, so all of it
+runs under `swift test` on the macOS slice with no screen. The screens
+(`App/Sources/ChapbookApp`, SwiftUI, iOS 17) ask the model and draw, and
+only `App/build.sh` compiles them, because a `.app` is not something
+SwiftPM produces for iOS. The model is its own package so its tests join
+the CI gate the way the library's do; it depends on `../Chapbook` by path.
 
 **Custody follows the grant.** A file picked through the document
 picker, or opened in place from Files, carries a security scope the app

@@ -26,12 +26,14 @@ class CatalogModelTest {
     private val context = InstrumentationRegistry.getInstrumentation().targetContext
 
     @Test
-    fun anOriginDropsThePathAndDefaultPortButKeepsANamedOne() {
-        assertEquals("https://example.org", Credentials.originOf("https://example.org/opds/feed?x=1"))
-        assertEquals("https://example.org", Credentials.originOf("https://example.org:443/opds/"))
-        assertEquals("http://example.org", Credentials.originOf("http://example.org:80/x"))
-        assertEquals("https://example.org:8443", Credentials.originOf("https://example.org:8443/x"))
+    fun aCredentialKeyIsTheEnginesAndDropsThePath() {
+        // The engine's key, so a sign-in the engine stored is what a
+        // cover request finds: the origin, lower-cased, never the path.
+        assertEquals("opds/origin/https://example.org", Credentials.originOf("https://Example.org/opds/feed?x=1"))
+        assertEquals("opds/origin/https://example.org:8443", Credentials.originOf("https://example.org:8443/x"))
+        assertEquals("opds/origin/http://host:8080", Credentials.originOf("http://user:pw@host:8080/feed"))
         assertNull(Credentials.originOf("not a url"))
+        assertNull(Credentials.originOf("/books/a.epub"))
     }
 
     @Test

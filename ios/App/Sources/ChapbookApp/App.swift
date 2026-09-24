@@ -40,7 +40,13 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
             default: log.info("\(target, privacy: .public): \(message, privacy: .public)")
             }
         }
-        container = AppContainer()
+        do {
+            container = try AppContainer()
+        } catch {
+            // No library means no app: the sandbox refused its own
+            // Application Support directory, which nothing here can mend.
+            fatalError("the library did not open: \(error)")
+        }
         super.init()
     }
 

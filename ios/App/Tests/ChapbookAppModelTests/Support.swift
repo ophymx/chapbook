@@ -37,12 +37,14 @@ func container(_ name: String, transfers: URLSessionConfiguration = .ephemeral) 
     let suite = "chapbook-app-test-\(name)-\(ProcessInfo.processInfo.processIdentifier)"
     let defaults = UserDefaults(suiteName: suite)!
     defaults.removePersistentDomain(forName: suite)
-    let container = AppContainer(
+    let container = try AppContainer(
         libraryDirectory: dir, defaults: defaults,
         // The Keychain is machine state, not process state: a service
         // name per process keeps one run's sign-in out of the next.
         credentials: Credentials(service: "com.ophymx.chapbook.tests.\(name).\(ProcessInfo.processInfo.processIdentifier)"),
-        downloads: transfers, container: dir)
+        // The same stubbed session browses the catalog and carries the
+        // download, so one canned server answers both.
+        downloads: transfers, http: transfers, container: dir)
     return (container, dir)
 }
 

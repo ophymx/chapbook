@@ -4,15 +4,17 @@ import Testing
 
 @testable import ChapbookAppModel
 
-// The networking model without a screen: origins parsed the way a
-// credential is keyed, credentials kept in the Keychain, and a catalog
-// browsed, refused and signed into against a canned server.
+// The networking model without a screen: origins keyed the way the
+// engine keys a credential, credentials kept in the Keychain, and a
+// catalog browsed, refused and signed into against a canned server.
 
-@Test func anOriginDropsThePathAndDefaultPortButKeepsANamedOne() {
-    #expect(Credentials.origin(of: "https://Example.org/opds/feed?x=1") == "https://example.org")
-    #expect(Credentials.origin(of: "https://example.org:443/opds/") == "https://example.org")
-    #expect(Credentials.origin(of: "http://example.org:80/x") == "http://example.org")
-    #expect(Credentials.origin(of: "https://example.org:8443/x") == "https://example.org:8443")
+@Test func anOriginIsTheEnginesKeyWithThePathDroppedAndThePortKept() {
+    // The engine's key, so a sign-in the engine stored under it is what
+    // the cover loader finds. It lowercases and drops the path; a port
+    // stays as typed, since the engine does not guess a scheme's default.
+    #expect(Credentials.origin(of: "https://Example.org/opds/feed?x=1") == "opds/origin/https://example.org")
+    #expect(Credentials.origin(of: "https://example.org:8443/x") == "opds/origin/https://example.org:8443")
+    #expect(Credentials.origin(of: "https://user:pw@example.org/x") == "opds/origin/https://example.org")
     #expect(Credentials.origin(of: "not a url") == nil)
 }
 
@@ -118,14 +120,12 @@ final class CatalogStub: URLProtocol {
     transfers.protocolClasses = [CatalogStub.self]
     let (app, dir) = try container("catalog", transfers: transfers)
     defer { try? FileManager.default.removeItem(at: dir) }
-    let http = Http(credentials: app.credentials, configuration: transfers)
     let saved = app.catalogs.add(url: "\(CatalogStub.host)/opds/")
     app.credentials.forget(Credentials.origin(of: saved.url)!)
     defer { app.credentials.forget(Credentials.origin(of: saved.url)!) }
 
-    let catalogSession = CatalogSession(transport: http.transport, credentials: app.credentials)
-    let vm = CatalogViewModel(
-        saved: saved, session: catalogSession, credentials: app.credentials, downloads: app.downloads)
+    let catalogSession = CatalogSession(platform: app.platform, savedID: Int64(saved.id))
+    let vm = CatalogViewModel(saved: saved, session: catalogSession, downloads: app.downloads)
 
     // A 401 is an answer: the login draws from the authentication document.
     await settle { if case .login = vm.ui { return true } else { return false } }

@@ -4604,6 +4604,24 @@ pub extern "system" fn Java_com_ophymx_chapbook_Native_searchWalkClose(
     }
 }
 
+/// How a platform transfer's HTTP status is read: 0 landed, 1 refused
+/// (401 or 403 — worth a sign-in, not a retry), 2 gone (any other
+/// client-side answer), 3 again (a 5xx, or no response at all).
+#[no_mangle]
+pub extern "system" fn Java_com_ophymx_chapbook_Native_downloadOutcome(
+    _env: JNIEnv,
+    _class: JClass,
+    status: jint,
+) -> jint {
+    use chapbook_app::DownloadOutcome;
+    match DownloadOutcome::of_status(status.clamp(0, u16::MAX as i32) as u16) {
+        DownloadOutcome::Landed => 0,
+        DownloadOutcome::Refused => 1,
+        DownloadOutcome::Gone => 2,
+        DownloadOutcome::Again => 3,
+    }
+}
+
 // ---- Credential helpers ----
 
 /// The key a credential for `url` lives under — what the app's own code

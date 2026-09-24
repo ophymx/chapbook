@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import com.ophymx.chapbook.Book
+import com.ophymx.chapbook.Opened
 import com.ophymx.chapbook.Session
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -26,18 +27,14 @@ sealed class Added {
  * because the file is the platform's and a copy would be a second one
  * to keep in step. A URI whose grant is one-shot — a share, a viewer
  * intent — is *imported*, a copy made while the bytes are still ours,
- * because there is no way to reach the file again. Both land on the
- * same shelf; only [Book.filePath] tells them apart.
+ * because there is no way to reach the file again. Which door a URI
+ * takes is decided here, because only the platform knows what its
+ * grants are worth; what each door does is the engine's, and the same
+ * on every platform.
  */
-class Opener(
-    context: Context,
-    private val libraryDir: File,
-    private val shelf: Shelf,
-    private val grants: Grants,
-) {
+class Opener(context: Context, private val shelf: Shelf) {
     private val resolver = context.contentResolver
     private val cacheDir = context.cacheDir
-    private val libraryPath = libraryDir.absolutePath
 
     /** A picked or shared file. Blocking work happens off the caller's thread. */
     suspend fun add(uri: Uri): Added = withContext(Dispatchers.IO) {
@@ -57,12 +54,10 @@ class Opener(
         } catch (e: Exception) {
             null
         } ?: return Added.Failed("no descriptor for $uri")
-        // Opening is what records the book; the session itself is not
-        // wanted yet. Nothing is saved on close, so this leaves no mark.
-        val id = (Session.openFd(pfd, libraryPath) ?: return Added.Failed("$uri is not a book"))
-            .use { it.bookId() }
-            ?: return Added.Failed("$uri did not reach the shelf")
-        shelf.book(id)?.let { grants.remember(it.fingerprint, uri) }
+        // The grant is the URI itself: the engine keeps it under the
+        // book's fingerprint and hands it back when the row is opened.
+        val id = shelf.withApp { adoptFd(pfd, uri.toString().toByteArray(Charsets.UTF_8)) }
+            ?: return Added.Failed("$uri is not a book")
         return Added.Book(id)
     }
 
@@ -87,14 +82,21 @@ class Opener(
      * reach: a grant the platform revoked, a copy the reader deleted.
      * Blocking; call off the main thread.
      */
-    fun open(book: Book): Session? {
-        book.filePath?.let { return Session.open(it, libraryPath) }
-        val uri = grants.uriFor(book.fingerprint) ?: return null
+    fun open(book: Book): Session? = when (val opened = shelf.blockingApp { openBook(book.id) }) {
+        is Opened.Session -> opened.session
+        Opened.Adopted -> openAdopted(book)
+        else -> null
+    }
+
+    /** The platform's half of custody: turn the remembered grant back into a descriptor. */
+    private fun openAdopted(book: Book): Session? {
+        val grant = shelf.blockingApp { grant(book.fingerprint) } ?: return null
+        val uri = Uri.parse(String(grant, Charsets.UTF_8))
         val pfd = try {
             resolver.openFileDescriptor(uri, "r")
         } catch (e: Exception) {
             null
         } ?: return null
-        return Session.openFd(pfd, libraryPath)
+        return shelf.blockingApp { openFd(pfd) }
     }
 }

@@ -156,7 +156,7 @@ enum class ActionOutcome {
  * does not enforce that — the C ABI's header will say it, and a real
  * binding should.
  */
-class Session private constructor(private var handle: Long) : AutoCloseable {
+class Session internal constructor(internal var handle: Long) : AutoCloseable {
 
     companion object {
         /**

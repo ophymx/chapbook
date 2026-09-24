@@ -11,10 +11,11 @@ import androidx.lifecycle.viewmodel.viewModelFactory
 import com.ophymx.chapbook.Annotation
 import com.ophymx.chapbook.Book
 import com.ophymx.chapbook.BookKind
-import com.ophymx.chapbook.Locator
 import com.ophymx.chapbook.Position
+import com.ophymx.chapbook.Reader
 import com.ophymx.chapbook.ReadingSettings
 import com.ophymx.chapbook.SearchHit
+import com.ophymx.chapbook.SearchWalk
 import com.ophymx.chapbook.Session
 import com.ophymx.chapbook.TocEntry
 import kotlinx.coroutines.Dispatchers
@@ -27,19 +28,18 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.yield
 
-/** Where the reader is, for the chrome. Updated after every draw. */
+/**
+ * Where the reader is, for the chrome. Updated after every draw, from
+ * the engine's own reading of it ([Reader.place]); this only adds the
+ * title and narrows the fraction for a progress bar.
+ */
 data class Place(
     val title: String = "",
     val spine: Int = 0,
     val spineLen: Int = 0,
     val page: Int = 0,
     val pageCount: Int = 0,
-    /**
-     * Whole-book progress, 0..1, spine-weighted the way the engine's own
-     * `book_progression` is: each unit a `1/spineLen` slice, the page's
-     * place within it added. The shell has every term, so the bar needs
-     * no new binding call.
-     */
+    /** Whole-book progress, 0..1, spine-weighted like the engine's own progression. */
     val bookFraction: Float = 0f,
     /** Whether the engine's Back has anywhere to go — after a link. */
     val canGoBack: Boolean = false,
@@ -80,9 +80,14 @@ data class Selection(val start: Int, val end: Int, val text: String)
  * current, and it is closed exactly once, when the screen is popped.
  * The engine's rule is that a session is touched by one thread at a
  * time: it is opened on an IO thread and, once handed over, only ever
- * touched from the main thread — which is why a search here walks the
- * book unit by unit on the main thread, yielding between units, rather
- * than blocking a worker that would race the next draw.
+ * touched from the main thread — which is why a search here steps the
+ * engine's [SearchWalk] on the main thread, yielding between units,
+ * rather than blocking a worker that would race the next draw.
+ *
+ * What the reader *decides* — where the reader is as one number, how
+ * much memory a cache may take, what a memory warning does, what a
+ * selection becoming a highlight involves — is the engine's ([Reader]);
+ * this class is the threads, the flows and the platform's callbacks.
  *
  * Everything that changes what the page shows ends by asking the view
  * to redraw through [onNeedsRedraw]; the view installs that while it is
@@ -148,9 +153,9 @@ class ReaderViewModel(
                 return@launch
             }
             val (session, toc, families) = opened
-            // The engine's default budget is a desktop's. A quarter of
-            // what the platform says this app may use is generous for a
-            // page cache and leaves the rest for the screen.
+            // The engine's default budget is a desktop's; the platform
+            // says what this app may use and the engine says how much of
+            // that a page cache is worth.
             session.cacheBudget = memoryBudget()
             _settings.value = session.settings
             _fontFamily.value = session.fontFamily
@@ -162,7 +167,7 @@ class ReaderViewModel(
     private fun memoryBudget(): Long {
         val manager = app.getSystemService(android.app.ActivityManager::class.java)
         val classMb = manager?.memoryClass ?: 64
-        return (classMb.toLong() * 1024 * 1024 / 4).coerceAtLeast(16L * 1024 * 1024)
+        return Reader.cacheBudgetFor(classMb.toLong() * 1024 * 1024)
     }
 
     private fun redraw() = onNeedsRedraw?.invoke()
@@ -170,20 +175,18 @@ class ReaderViewModel(
     // ---- Where the reader is ----
 
     /** Called by the page after each draw, which is when a position is authoritative. */
+    @Suppress("UNUSED_PARAMETER")
     fun moved(position: Position) {
         val s = session ?: return
-        val spineLen = s.spineLen
-        val pageCount = s.pageCount
-        val within = if (pageCount > 0) position.page.toFloat() / pageCount else 0f
-        val bookFraction = if (spineLen > 0) ((position.spine + within) / spineLen).coerceIn(0f, 1f) else 0f
+        val place = Reader.place(s)
         _place.value = Place(
             title = s.title,
-            spine = position.spine,
-            spineLen = spineLen,
-            page = position.page,
-            pageCount = pageCount,
-            bookFraction = bookFraction,
-            canGoBack = s.canGoBack,
+            spine = place.spine,
+            spineLen = place.spineLen,
+            page = place.page,
+            pageCount = place.pageCount,
+            bookFraction = place.bookFraction.toFloat(),
+            canGoBack = place.canGoBack,
         )
         // Settings can change under a page turn — `font-up` from a
         // pinch — so the sheet's numbers follow the draw too.
@@ -240,8 +243,7 @@ class ReaderViewModel(
     /** The selection becomes a highlight, and the selection goes. */
     fun highlightSelection() {
         val s = session ?: return
-        s.addHighlight()
-        s.selectionClear()
+        Reader.highlightSelection(s)
         _selection.value = null
         refreshMarks()
         redraw()
@@ -249,8 +251,7 @@ class ReaderViewModel(
 
     fun noteOnSelection(body: String) {
         val s = session ?: return
-        s.addNote(body)
-        s.selectionClear()
+        Reader.noteOnSelection(s, body)
         _selection.value = null
         refreshMarks()
         redraw()
@@ -293,29 +294,34 @@ class ReaderViewModel(
     // ---- Search ----
 
     /**
-     * Search the book, one unit at a time on the main thread, yielding
-     * between units so the page stays responsive. The blocking
-     * whole-book `search` would want a worker, and a worker would touch
-     * the session while the page draws — the one rule the engine has.
+     * Search the book, stepping the engine's walk one unit at a time on
+     * the main thread and yielding between units so the page stays
+     * responsive. The blocking whole-book `search` would want a worker,
+     * and a worker would touch the session while the page draws — the
+     * one rule the engine has. The cap is the walk's.
      */
     fun search(query: String) {
         searching?.cancel()
         val trimmed = query.trim()
-        if (trimmed.isEmpty()) {
+        val walk = SearchWalk.open(trimmed)
+        if (walk == null) {
             _search.value = SearchState()
             return
         }
         _search.value = SearchState(query = trimmed, running = true)
         searching = viewModelScope.launch {
-            val s = session ?: return@launch
-            val hits = ArrayList<SearchHit>()
-            for (spine in 0 until s.spineLen) {
-                hits += s.searchUnit(spine, trimmed)
-                _search.update { it.copy(hits = hits.toList()) }
-                if (hits.size >= SEARCH_CAP) break
-                yield()
+            try {
+                val s = session ?: return@launch
+                var more = true
+                while (more) {
+                    more = walk.step(s)
+                    _search.update { it.copy(hits = walk.hits()) }
+                    yield()
+                }
+                _search.update { it.copy(running = false) }
+            } finally {
+                walk.close()
             }
-            _search.update { it.copy(running = false) }
         }
     }
 
@@ -327,8 +333,7 @@ class ReaderViewModel(
     /** Jump to a hit and leave it selected, so the eye finds it. */
     fun gotoHit(hit: SearchHit) {
         val s = session ?: return
-        s.goto(Locator(hit.spine, hit.start))
-        s.selectRange(hit.start, hit.end)
+        Reader.showHit(s, hit)
         redraw()
     }
 
@@ -341,12 +346,14 @@ class ReaderViewModel(
 
     override fun onTrimMemory(level: Int) {
         val s = session ?: return
-        // Lowering the budget evicts at once; halving it on a real
-        // warning keeps the next warning from finding the same cache.
+        // A real warning halves the budget, which evicts at once, and
+        // keeps the next warning from finding the same cache; a milder
+        // trim just gives the caches back.
         if (level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW) {
-            s.cacheBudget = (s.cacheBudget / 2).coerceAtLeast(4L * 1024 * 1024)
+            Reader.afterMemoryWarning(s)
+        } else {
+            s.releaseCaches()
         }
-        s.releaseCaches()
     }
 
     override fun onConfigurationChanged(newConfig: Configuration) = Unit
@@ -365,8 +372,6 @@ class ReaderViewModel(
     }
 
     companion object {
-        private const val SEARCH_CAP = 200
-
         fun factory(app: Application, container: AppContainer, bookId: Long): ViewModelProvider.Factory =
             viewModelFactory {
                 initializer { ReaderViewModel(app, bookId, container.shelf, container.opener, container.preferences) }

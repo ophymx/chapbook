@@ -130,8 +130,13 @@ sealed class CatalogError : Exception() {
  * a proxy, a user CA, or a corporate network works because the
  * platform's HTTP client does.
  */
-class Catalog(transport: SyncTransport) : AutoCloseable {
-    private var handle: Long = Native.catalogOpen(transport)
+class Catalog internal constructor(private var handle: Long) : AutoCloseable {
+    /**
+     * A catalog over the app's transport and no store: sign in through
+     * [signIn] and the credential lasts this handle. [App.browse] is the
+     * door with a store behind it, where a sign-in is kept.
+     */
+    constructor(transport: SyncTransport) : this(Native.catalogOpen(transport))
 
     init {
         check(handle != 0L) { "catalog did not open; see logcat" }
@@ -267,6 +272,92 @@ class Catalog(transport: SyncTransport) : AutoCloseable {
             annotationContainer = Native.catalogEntryText(handle, index, 13),
         )
     }
+
+    // ---- Browsing ----
+    //
+    // The state machine the app used to keep in a ViewModel, now the
+    // engine's: a navigation row pushes a crumb, Back walks the crumbs
+    // before it leaves the screen, a facet replaces and a page appends,
+    // a 401 is a login rather than a failure, and a sign-in stores the
+    // credential by origin and fetches again. Every verb blocks, like
+    // [fetch]; run them on the catalog's own thread.
+
+    /** What the screen shows now. */
+    sealed class BrowseState {
+        /** Nothing fetched yet. */
+        data object Opening : BrowseState()
+
+        /** A feed is held; read it through [entries], [facets] and the rest. */
+        data object Feed : BrowseState()
+
+        /** A 401 with a login to draw; [retryUrl] is what [signIn] fetches again. */
+        data class Login(val title: String, val offersBasic: Boolean, val retryUrl: String) : BrowseState()
+
+        /** The fetch of [url] failed. [reason] is for logcat, not the reader. */
+        data class Failed(val url: String, val reason: String) : BrowseState()
+    }
+
+    /** Open a feed the reader chose, pushing a crumb [back] returns to. */
+    @Throws(CatalogError::class)
+    fun go(url: String) = check(Native.catalogGo(handle, url))
+
+    /**
+     * Back inside the catalog: refetch the previous crumb. False at the
+     * root, which is the cue to leave the screen.
+     */
+    fun back(): Boolean = Native.catalogBack(handle)
+
+    /**
+     * Fetch the next page and append its rows to [entries]. False when
+     * there is no next page; throws when the page did not arrive, with
+     * the held feed untouched.
+     */
+    @Throws(CatalogError::class)
+    fun loadMore(): Boolean = when (val code = Native.catalogLoadMore(handle)) {
+        1 -> true
+        0 -> false
+        else -> {
+            check(code)
+            false
+        }
+    }
+
+    /** Narrow by a facet, by its index in [facets] — a fetch that pushes a crumb. */
+    @Throws(CatalogError::class)
+    fun applyFacet(facet: Facet) = check(Native.catalogApplyFacet(handle, facet.index))
+
+    /**
+     * Sign in to the catalog that refused: the credential is stored by
+     * the refused URL's origin — through the app's store, never by the
+     * URL — and the URL fetched again without moving a crumb. Unlike
+     * [signIn], which only sets the credential on this handle. Throws
+     * when nothing asked for a login.
+     */
+    @Throws(CatalogError::class)
+    fun submitLogin(username: String, password: String) =
+        check(Native.catalogSignIn(handle, username, password))
+
+    /** What the screen shows now. */
+    val state: BrowseState
+        get() = when (Native.catalogState(handle)) {
+            1 -> BrowseState.Feed
+            2 -> BrowseState.Login(
+                title = Native.catalogBrowseText(handle, 2) ?: "",
+                offersBasic = authOffersBasic,
+                retryUrl = Native.catalogBrowseText(handle, 3) ?: "",
+            )
+            3 -> BrowseState.Failed(
+                url = Native.catalogBrowseText(handle, 4) ?: "",
+                reason = Native.catalogBrowseText(handle, 5) ?: "",
+            )
+            else -> BrowseState.Opening
+        }
+
+    /** What goes at the top: the held feed's title, or the saved catalog's until there is one. */
+    val title: String get() = Native.catalogBrowseText(handle, 0) ?: ""
+
+    /** The URL the held feed came from. */
+    val url: String get() = Native.catalogBrowseText(handle, 1) ?: ""
 
     /** The refused catalog's own name, for a login sheet. */
     val authTitle: String? get() = Native.catalogAuthTitle(handle)

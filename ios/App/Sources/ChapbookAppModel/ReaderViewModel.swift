@@ -4,17 +4,17 @@ import Foundation
     import os
 #endif
 
-/// Where the reader is, for the chrome. Updated after every draw.
+/// Where the reader is, for the chrome. Updated after every draw, from
+/// the engine's own reading of it (`Session.place()`); this only adds
+/// the title.
 public struct Place: Hashable, Sendable {
     public var title = ""
     public var spine = 0
     public var spineLength = 0
     public var page = 0
     public var pageCount = 0
-    /// Whole-book progress, 0...1, spine-weighted the way the engine's own
-    /// `book_progression` is: each unit a `1/spineLength` slice, the
-    /// page's place within it added. The shell has every term, so the bar
-    /// needs no new binding call.
+    /// Whole-book progress, 0...1, spine-weighted like the engine's own
+    /// progression.
     public var bookFraction = 0.0
     /// Whether the engine's Back has anywhere to go — after a link.
     public var canGoBack = false
@@ -83,7 +83,6 @@ public final class ReaderViewModel: ObservableObject {
     private let opener: Opener
     public let preferences: Preferences
     private var searching: Task<Void, Never>?
-    private static let searchCap = 200
 
     public var session: Session? {
         if case .reading(let reading) = state { return reading.session }
@@ -103,9 +102,9 @@ public final class ReaderViewModel: ObservableObject {
             state = .gone
             return
         }
-        // The engine's default budget is a desktop's. A quarter of what
-        // the platform says this process may still take is generous for
-        // a page cache and leaves the rest for the screen.
+        // The engine's default budget is a desktop's; the platform says
+        // what this process may take and the engine says how much of
+        // that a page cache is worth.
         let budget = Self.memoryBudget()
         let opener = self.opener
         let opened = await offMain { () throws -> Reading? in
@@ -131,12 +130,10 @@ public final class ReaderViewModel: ObservableObject {
     }
 
     static func memoryBudget() -> Int {
-        let floor = 16 << 20
         #if os(iOS)
-            let available = os_proc_available_memory()
-            return max(floor, min(192 << 20, available / 4))
+            return Reader.cacheBudget(for: UInt64(os_proc_available_memory()))
         #else
-            return max(floor, min(192 << 20, Int(ProcessInfo.processInfo.physicalMemory / 16)))
+            return Reader.cacheBudget(for: ProcessInfo.processInfo.physicalMemory / 4)
         #endif
     }
 
@@ -149,19 +146,16 @@ public final class ReaderViewModel: ObservableObject {
     /// Called by the page after each draw, which is when a position is
     /// authoritative.
     public func moved(_ position: Session.Position) {
-        guard let session else { return }
-        let spineLength = (try? session.spineLength()) ?? 0
-        let pageCount = (try? session.pageCount()) ?? 0
-        let within = pageCount > 0 ? Double(position.page) / Double(pageCount) : 0
-        let fraction = spineLength > 0 ? (Double(position.spine) + within) / Double(spineLength) : 0
+        guard let session, let read = try? session.place() else { return }
+        _ = position
         place = Place(
             title: session.title() ?? "",
-            spine: position.spine,
-            spineLength: spineLength,
-            page: position.page,
-            pageCount: pageCount,
-            bookFraction: min(1, max(0, fraction)),
-            canGoBack: (try? session.canGoBack()) ?? false)
+            spine: read.spine,
+            spineLength: read.spineLength,
+            page: read.page,
+            pageCount: read.pageCount,
+            bookFraction: read.bookFraction,
+            canGoBack: read.canGoBack)
         // Settings can change under a page turn — `fontUp` from a pinch
         // — so the sheet's numbers follow the draw too.
         settings = try? session.settings()
@@ -217,8 +211,7 @@ public final class ReaderViewModel: ObservableObject {
     /// The selection becomes a highlight, and the selection goes.
     public func highlightSelection() {
         guard let session else { return }
-        _ = try? session.addHighlight()
-        try? session.clearSelection()
+        _ = try? session.highlightSelection()
         selection = nil
         refreshMarks()
         redraw()
@@ -226,8 +219,7 @@ public final class ReaderViewModel: ObservableObject {
 
     public func note(onSelection body: String) {
         guard let session else { return }
-        _ = try? session.addNote(body)
-        try? session.clearSelection()
+        _ = try? session.note(onSelection: body)
         selection = nil
         refreshMarks()
         redraw()
@@ -271,27 +263,26 @@ public final class ReaderViewModel: ObservableObject {
 
     // MARK: Search
 
-    /// Search the book, one unit at a time on the main actor, yielding
-    /// between units so the page stays responsive. The blocking
-    /// whole-book `search` would want a worker, and a worker would touch
-    /// the session while the page draws — the one rule the engine has.
+    /// Search the book, stepping the engine's walk one unit at a time on
+    /// the main actor and yielding between units so the page stays
+    /// responsive. The blocking whole-book `search` would want a worker,
+    /// and a worker would touch the session while the page draws — the
+    /// one rule the engine has. The cap is the walk's.
     public func search(_ query: String) {
         searching?.cancel()
         let trimmed = query.trimmingCharacters(in: .whitespaces)
-        guard !trimmed.isEmpty else {
+        guard let walk = SearchWalk(query: trimmed) else {
             search = SearchState()
             return
         }
         search = SearchState(query: trimmed, running: true)
         searching = Task { [weak self] in
             guard let self, let session else { return }
-            var hits: [Session.SearchHit] = []
-            let units = (try? session.spineLength()) ?? 0
-            for spine in 0..<units {
+            var more = true
+            while more {
                 if Task.isCancelled { return }
-                hits += (try? session.searchUnit(spine, for: trimmed)) ?? []
-                search.hits = hits
-                if hits.count >= Self.searchCap { break }
+                more = (try? walk.step(session)) ?? false
+                search.hits = (try? walk.hits()) ?? []
                 await Task.yield()
             }
             if !Task.isCancelled { search.running = false }
@@ -306,8 +297,7 @@ public final class ReaderViewModel: ObservableObject {
     /// Jump to a hit and leave it selected, so the eye finds it.
     public func go(toHit hit: Session.SearchHit) {
         guard let session else { return }
-        _ = try? session.go(to: hit.locator)
-        try? session.select(hit.locators)
+        _ = try? session.show(hit)
         redraw()
     }
 
@@ -318,13 +308,10 @@ public final class ReaderViewModel: ObservableObject {
         try? session?.suspend()
     }
 
-    /// A memory warning: lowering the budget evicts at once, and halving
-    /// it keeps the next warning from finding the same cache.
+    /// A memory warning: the engine halves the budget, which evicts at
+    /// once and keeps the next warning from finding the same cache.
     public func memoryWarning() {
-        guard let session else { return }
-        let budget = (try? session.cacheBudget()) ?? 0
-        try? session.setCacheBudget(max(4 << 20, budget / 2))
-        try? session.releaseCaches()
+        _ = try? session?.afterMemoryWarning()
     }
 
     /// The screen is gone: save the place and let the session go, once.

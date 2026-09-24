@@ -51,18 +51,21 @@ Prerequisites that are not guessable:
 
 ## The app
 
-`app/` is a reading application over the AAR, and its shape is
-`chapbook-app`'s one level up: everything that is not a widget lives in
-`app/src/main/kotlin/.../model` — which books the shelf shows and in what
-order (recently read first, the same default as the desktop app and the
-CLI), how a file becomes a book, how a book is opened and found again,
-and the threads the engine's rules demand — and nothing in that package
-imports Compose, so all of it runs under `ShelfModelTest` with no screen.
-The screens (`ui/`) ask the model and draw. The desktop model crate
-itself is not used: it bundles `ureq`, reads credentials from the
-environment, refuses adopted books and keeps English strings in Rust,
-each of which is wrong on a phone, while every decision it holds already
-has a Kotlin home in the AAR.
+`app/` is a reading application over the AAR. Its decisions are not its
+own: `com.ophymx.chapbook.App` in the AAR is `crates/chapbook-app`, the
+application layer every front end shares (`docs/APP.md`), and it decides
+which books the shelf shows and in what order, how a file becomes a book
+and is found again, how a catalog is browsed, refused and signed into,
+what a landed download does, how much memory the page cache may take,
+and how sync is driven. What `app/src/main/kotlin/.../model` keeps is
+the platform half — `Grants` turning a content URI into the opaque bytes
+the engine stores, `Credentials` as the Keystore-backed `CredentialStore`
+the engine signs in through, OkHttp as the transport, `Opener` resolving
+a grant to a descriptor, `Downloads` over `DownloadManager` — and the
+threads the engine's rules demand: one `App` handle on one dispatcher,
+like a session. Nothing in that package imports Compose, so all of it
+runs under `ShelfModelTest` with no screen. The screens (`ui/`) ask the
+model and draw.
 
 **Custody follows the grant.** A file picked through `OpenDocument` has
 a read grant that persists, so it is *adopted*: the library records it

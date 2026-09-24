@@ -19,21 +19,21 @@ public enum Added: Sendable {
 /// second one to keep in step. A file that landed in the app's own
 /// container — the `Inbox` a "Copy to Chapbook" share fills — is
 /// *imported*, a copy made and the inbox file removed, because the inbox
-/// is ours to clean and the bytes are already ours. Both land on the same
-/// shelf; only `Library.Book.fileURL` tells them apart.
+/// is ours to clean and the bytes are already ours. Which door a URL
+/// takes is decided here, because only the platform knows what its
+/// grants are worth; what each door does is the engine's, and the same
+/// on every platform.
 public final class Opener: Sendable {
-    private let libraryDirectory: URL
+    private let platform: Platform
     private let shelf: Shelf
-    private let grants: Grants
     /// The app's own container, which decides which door a URL takes.
     private let container: String
 
     /// `container` is the app's own sandbox by default; a test names its
     /// scratch directory, since a temp dir on a Mac is not under home.
-    public init(libraryDirectory: URL, shelf: Shelf, grants: Grants, container: URL? = nil) {
-        self.libraryDirectory = libraryDirectory
+    public init(platform: Platform, shelf: Shelf, container: URL? = nil) {
+        self.platform = platform
         self.shelf = shelf
-        self.grants = grants
         self.container = (container?.standardizedFileURL.path ?? NSHomeDirectory())
     }
 
@@ -46,13 +46,6 @@ public final class Opener: Sendable {
         return await adopt(url)
     }
 
-    /// The configuration every session in this app opens with: the
-    /// bundled faces, the app's library, and the platform's transport.
-    public func configuration(cacheBudget: Int? = nil) -> SessionConfiguration {
-        SessionConfiguration(
-            fonts: Self.fonts, libraryDirectory: libraryDirectory, cacheBudgetBytes: cacheBudget)
-    }
-
     /// Where the bundled faces are: `fonts/` beside the executable, the
     /// same place the demo keeps them. A test without a bundle points
     /// `fontsDirectory` at the fixtures.
@@ -63,8 +56,9 @@ public final class Opener: Sendable {
         .embedded(directory: fontsDirectory, family: "Crimson Text")
     }
 
-    /// Adopt: bookmark the grant, open once to record the book, keep the
-    /// bookmark under the fingerprint that opening produced.
+    /// Adopt: bookmark the grant, then let the engine open the file once
+    /// to record the book and keep the bookmark under the fingerprint
+    /// that opening produced.
     public func adopt(_ url: URL) async -> Added {
         let bookmark: Data
         do {
@@ -72,24 +66,18 @@ public final class Opener: Sendable {
         } catch {
             return .failed("no bookmark for \(url.lastPathComponent): \(error)")
         }
-        let configuration = configuration()
-        // Opening is what records the book; the session itself is not
-        // wanted yet. Nothing is saved on close, so this leaves no mark.
-        let opened: Result<Int64?, Error> = await offMain {
+        let platform = self.platform
+        // An `App` of this call's own: one library connection, opened,
+        // used on this thread and dropped, so nothing here shares a
+        // handle with the shelf's actor.
+        let adopted: Result<Int64, Error> = await offMain {
             let resolved = try SecurityScopedBook.open(bookmark)
-            let session = try Session(
-                source: .fileDescriptor(resolved.fileDescriptor), configuration: configuration)
-            return try session.bookID()
+            return try platform.open().adopt(fileDescriptor: resolved.fileDescriptor, grant: bookmark)
         }
-        switch opened {
+        switch adopted {
         case .failure(let error):
             return .failed("\(url.lastPathComponent) is not a book: \(error)")
-        case .success(nil):
-            return .failed("\(url.lastPathComponent) did not reach the shelf")
-        case .success(.some(let id)):
-            if let book = try? await shelf.book(id) {
-                grants.remember(bookmark, for: book.fingerprint)
-            }
+        case .success(let id):
             return .book(id)
         }
     }
@@ -107,16 +95,24 @@ public final class Opener: Sendable {
 
     /// Open a shelf row for reading, or `nil` when its file is out of
     /// reach: a grant the platform revoked, a copy the reader deleted.
-    /// Blocking; the caller keeps it off the main actor.
+    /// Blocking; the caller keeps it off the main actor. Opens an `App`
+    /// of its own for the call, as `adopt(_:)` does.
     public func open(_ book: Library.Book, cacheBudget: Int? = nil) throws -> Session? {
-        let configuration = configuration(cacheBudget: cacheBudget)
-        if let file = book.fileURL {
-            guard FileManager.default.fileExists(atPath: file.path) else { return nil }
-            return try Session(source: .path(file), configuration: configuration)
+        let app = try platform.open()
+        switch try app.open(book: book.id) {
+        case .session(let session):
+            if let budget = cacheBudget { try session.setCacheBudget(budget) }
+            return session
+        case .missing:
+            return nil
+        case .adopted:
+            // The platform's half of custody: the remembered bookmark,
+            // resolved to a descriptor, opened with the app's own
+            // configuration.
+            guard let bookmark = try app.grant(for: book.fingerprint) else { return nil }
+            guard let resolved = try? SecurityScopedBook.open(bookmark) else { return nil }
+            return try app.open(.fileDescriptor(resolved.fileDescriptor), cacheBudgetBytes: cacheBudget)
         }
-        guard let bookmark = grants.bookmark(for: book.fingerprint) else { return nil }
-        guard let resolved = try? SecurityScopedBook.open(bookmark) else { return nil }
-        return try Session(source: .fileDescriptor(resolved.fileDescriptor), configuration: configuration)
     }
 }
 

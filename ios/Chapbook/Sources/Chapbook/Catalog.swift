@@ -133,6 +133,11 @@ public final class Catalog {
         raw = handle
     }
 
+    /// A handle the engine opened — `App.browse(_:)` — wrapped.
+    init(raw: OpaquePointer) {
+        self.raw = raw
+    }
+
     deinit { cb_catalog_close(raw) }
 
     // MARK: Credentials
@@ -435,6 +440,100 @@ public final class Catalog {
         var book: Int64 = 0
         try check(cb_catalog_download(raw, index, libraryDirectory.path, &book))
         return book
+    }
+
+    // MARK: Browsing, as the application layer drives it
+
+    /// What a catalog screen shows.
+    public enum BrowseState: Hashable, Sendable {
+        /// Nothing fetched yet.
+        case opening
+        /// A feed is held; read it through `entries()`, `facets()` and
+        /// the rest.
+        case feed
+        /// A 401 with a login to draw; `retry` is what
+        /// ``submitLogin(username:password:)`` fetches again.
+        case login(title: String, offersBasic: Bool, retry: URL?)
+        /// The fetch of `url` failed. `reason` is for a log, not the reader.
+        case failed(url: URL?, reason: String)
+    }
+
+    /// Open a feed the reader chose — the root, a navigation row's
+    /// `href`, a facet — pushing a crumb ``back()`` returns to. Throws
+    /// with `isAuthRequired` for a login, or the fetch's own failure;
+    /// the state follows either way. Blocking.
+    public func go(_ url: URL) throws {
+        try check(cb_catalog_go(raw, url.absoluteString))
+    }
+
+    /// Back inside the catalog: refetch the previous crumb. `false` at
+    /// the root, which is the cue to leave the screen. Blocking when it
+    /// stays.
+    public func back() throws -> Bool {
+        var stayed = false
+        try check(cb_catalog_back(raw, &stayed))
+        return stayed
+    }
+
+    /// Fetch the next page and append its rows to `entries()`. `false`
+    /// when there is no next page; throws when the page did not arrive,
+    /// with the held feed untouched. Blocking.
+    public func loadMore() throws -> Bool {
+        var appended = false
+        try check(cb_catalog_load_more(raw, &appended))
+        return appended
+    }
+
+    /// Narrow by a facet, by its index in `facets()` — a fetch that
+    /// pushes a crumb. Blocking.
+    public func applyFacet(at index: Int) throws {
+        try check(cb_catalog_apply_facet(raw, index))
+    }
+
+    /// Sign in to the catalog that refused: the credential is stored by
+    /// the refused URL's origin — through the app's credential store,
+    /// never by the URL — and the URL fetched again without moving a
+    /// crumb. Unlike ``signIn(username:password:)``, which only sets the
+    /// credential on this handle. Throws `CB_ERR_UNAVAILABLE` when
+    /// nothing asked for a login. Blocking.
+    public func submitLogin(username: String, password: String) throws {
+        try check(cb_catalog_sign_in(raw, username, password))
+    }
+
+    /// What the screen shows now.
+    public func browseState() throws -> BrowseState {
+        var state = CB_BROWSE_OPENING
+        try check(cb_catalog_state(raw, &state))
+        switch state {
+        case CB_BROWSE_FEED:
+            return .feed
+        case CB_BROWSE_LOGIN:
+            return .login(
+                title: try browseText(CB_BROWSE_LOGIN_TITLE) ?? "",
+                offersBasic: try authOffersBasic(),
+                retry: try browseText(CB_BROWSE_RETRY_URL).flatMap(URL.init))
+        case CB_BROWSE_FAILED:
+            return .failed(
+                url: try browseText(CB_BROWSE_FAILURE_URL).flatMap(URL.init),
+                reason: try browseText(CB_BROWSE_FAILURE_REASON) ?? "")
+        default:
+            return .opening
+        }
+    }
+
+    /// What goes at the top: the held feed's title, or the saved
+    /// catalog's until there is one.
+    public func browseTitle() -> String {
+        (try? browseText(CB_BROWSE_TITLE)) ?? ""
+    }
+
+    /// The URL the held feed came from.
+    public func browseURL() -> URL? {
+        (try? browseText(CB_BROWSE_URL))?.flatMap(URL.init)
+    }
+
+    private func browseText(_ field: cb_browse_field) throws -> String? {
+        try readOptionalString { cb_catalog_browse_text(raw, field, $0, $1, $2) }
     }
 
     // MARK: The login sheet

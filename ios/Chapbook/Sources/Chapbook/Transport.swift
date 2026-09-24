@@ -49,6 +49,16 @@ public struct HTTPTransport: Sendable {
             cb_config_set_http_transport(
                 config, transportGet, transportFinalize, box.toOpaque()))
     }
+
+    /// Install with the write half too — what an `App` needs, since its
+    /// sync driver PUTs positions and POSTs marks. Same ownership rule.
+    func installFull(into config: OpaquePointer) throws {
+        guard case .urlSession(let session) = kind else { return }
+        let box = Unmanaged.passRetained(URLSessionTransport(session: session))
+        try check(
+            cb_config_set_http_transport_full(
+                config, transportGet, transportSend, transportFinalize, box.toOpaque()))
+    }
 }
 
 /// The retained object behind the C `user` pointer. The engine promises
