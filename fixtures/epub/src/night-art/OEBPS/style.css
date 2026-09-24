@@ -1,0 +1,30 @@
+img {
+  margin: 1em 0;
+}
+
+/* Black-on-transparent line art: a white ground for readers that know no
+   colour scheme, so the lines are never black on black. */
+img.art {
+  background: #fff !important;
+}
+
+/* Where the reader does know a scheme: line art loses the ground and, in
+   the dark, inverts to white lines; a realistic plate keeps black lines and
+   takes a ground in the text colour instead. The shape of Standard Ebooks'
+   core.css, which is where a reader meets this in the wild. */
+@media all and (prefers-color-scheme) {
+  img.art:not(.realistic) {
+    background: transparent !important;
+  }
+}
+
+@media all and (prefers-color-scheme: dark) {
+  img.art {
+    filter: invert(100%);
+  }
+
+  img.art.realistic {
+    background: currentColor;
+    filter: none;
+  }
+}

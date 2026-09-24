@@ -145,10 +145,15 @@ pub fn layout(epub: &Path, spine: usize) -> Result<String> {
     let (doc, css, notes) = styled_chapter(&book, spine, &href, &ReadingSettings::default())?;
 
     let (mut fonts, _) = chapbook_layout::build_font_system(&fixture_fonts())?;
-    let images = load_chapter_assets(&book, &href, &doc, &css, &mut fonts);
+    let mut images = load_chapter_assets(&book, &href, &doc, &css, &mut fonts);
     let sheets: Vec<String> = css.iter().map(|(text, _)| text.clone()).collect();
-    let layout =
-        chapbook_layout::paginate(&doc, &sheets, &PageMetrics::default(), &mut fonts, &images);
+    let layout = chapbook_layout::paginate(
+        &doc,
+        &sheets,
+        &PageMetrics::default(),
+        &mut fonts,
+        &mut images,
+    );
 
     let mut out = notes;
     out.push_str(&format!("pages: {}\n", layout.pages.len()));
@@ -208,10 +213,10 @@ pub fn render(
     let (doc, css, _notes) = styled_chapter(&book, spine, &href, &settings)?;
 
     let (mut fonts, _) = chapbook_layout::build_font_system(&fixture_fonts())?;
-    let images = load_chapter_assets(&book, &href, &doc, &css, &mut fonts);
+    let mut images = load_chapter_assets(&book, &href, &doc, &css, &mut fonts);
     let sheets: Vec<String> = css.iter().map(|(text, _)| text.clone()).collect();
     let metrics = PageMetrics::default();
-    let layout = chapbook_layout::paginate(&doc, &sheets, &metrics, &mut fonts, &images);
+    let layout = chapbook_layout::paginate(&doc, &sheets, &metrics, &mut fonts, &mut images);
 
     let page_data = layout.pages.get(page).ok_or_else(|| {
         chapbook_core::ChapbookError::Layout(format!(

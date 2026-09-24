@@ -39,7 +39,7 @@ fn layout_html(html: &str, css: &str, page: &PageMetrics) -> (ChapterLayout, Doc
         &css_sources,
         page,
         &mut fonts,
-        &chapbook_paint::ImageStore::default(),
+        &mut chapbook_paint::ImageStore::default(),
     );
     (layout, doc)
 }
@@ -209,7 +209,7 @@ fn fixture_book_layout(spine: usize) -> (ChapterLayout, Document, String) {
         &css,
         &page,
         &mut fonts,
-        &chapbook_paint::ImageStore::default(),
+        &mut chapbook_paint::ImageStore::default(),
     );
     let display_text = chapbook_layout::dom::extract_text(&doc);
     (layout, doc, display_text)
@@ -702,7 +702,7 @@ fn layout_html_with_image(
         stack.extend(doc.node(id).children.iter().copied());
     }
     let mut fonts = fonts();
-    let layout = chapbook_layout::paginate(&doc, &css_sources, page, &mut fonts, &images);
+    let layout = chapbook_layout::paginate(&doc, &css_sources, page, &mut fonts, &mut images);
     (layout, doc)
 }
 
@@ -1252,7 +1252,7 @@ fn layout_html_settings(
         &css_sources,
         page,
         &mut fonts,
-        &chapbook_paint::ImageStore::default(),
+        &mut chapbook_paint::ImageStore::default(),
     )
 }
 

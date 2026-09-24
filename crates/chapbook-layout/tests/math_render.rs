@@ -38,7 +38,7 @@ fn layout_html(html: &str) -> (ChapterLayout, Document) {
         &[],
         &page(),
         &mut fonts,
-        &chapbook_paint::ImageStore::default(),
+        &mut chapbook_paint::ImageStore::default(),
     );
     (layout, doc)
 }

@@ -98,33 +98,43 @@ fn page_of(char_map: &[u32], char_offset: u32) -> usize {
 ///
 /// `css_sources` are the same author sheets given to the style engine — the
 /// fragmentation sidecar re-reads them for the break properties stylo
-/// doesn't carry.
+/// doesn't carry. `images` is read for intrinsic sizes and written for
+/// images whose element carries a `filter`: those get a derived copy in
+/// the store (see [`ImageStore::derive`]) and their fragment points at it.
 pub fn paginate(
     doc: &Document,
     css_sources: &[String],
     page: &PageMetrics,
     fonts: &mut FontSystem,
-    images: &ImageStore,
+    images: &mut ImageStore,
 ) -> ChapterLayout {
     let frag = FragRules::parse(css_sources).resolve(doc);
     let locator = crate::dom::locator_offsets(doc);
     #[cfg(feature = "mathml")]
     let math = crate::mathml::prepare(doc, fonts, &locator);
-    let input = boxtree::BoxTreeInput {
-        doc,
-        frag: &frag,
-        locator: &locator,
-        images,
-        #[cfg(feature = "mathml")]
-        math: &math,
-        quote_depth: std::cell::Cell::new(0),
-    };
+    let (mut pages, char_map, pending) = {
+        let input = boxtree::BoxTreeInput {
+            doc,
+            frag: &frag,
+            locator: &locator,
+            images: &*images,
+            #[cfg(feature = "mathml")]
+            math: &math,
+            quote_depth: std::cell::Cell::new(0),
+        };
 
-    let mut paginator = paginate::Paginator::new(fonts, *page);
-    if let Some(root) = boxtree::build_box_tree(&input) {
-        paginator.place_block(&root, 0.0, page.content_width());
-    }
-    let (pages, char_map) = paginator.finish();
+        let mut paginator = paginate::Paginator::new(fonts, *page);
+        if let Some(root) = boxtree::build_box_tree(&input) {
+            paginator.place_block(&root, 0.0, page.content_width());
+        }
+        paginator.finish()
+    };
+    // An image whose element carries a `filter` paints as a derived copy:
+    // composed once, here, where the element's style, the theme's media
+    // state and the pixels all meet — so the display list keeps its three
+    // dumb ops and no backend learns colour maths. The store is borrowed
+    // mutably only now, after the box tree that read it for sizes is gone.
+    paginate::resolve_filters(&mut pages, images, pending);
 
     // Anchors: element id → page, via each element's locator offset.
     let mut anchors = HashMap::new();
