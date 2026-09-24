@@ -102,9 +102,12 @@ units — the blocking whole-book call would want a worker, and a worker
 would touch the session while the page draws; a hit jumps and stays
 selected), marks (bookmark this page; every mark with its progression;
 delete), and settings (text size, line height, justify, publisher
-styles, theme, typeface, scoped to this book or to every book, and a
-reset). The title bar shows *Return* only while the engine's Back has
-somewhere to go. A long press selects the word under the finger and the
+styles, theme, typeface, the progress readout, scoped to this book or to
+every book, and a reset; the sheet scrolls). The title bar carries a slim whole-book progress bar — spine-weighted
+from the position the shell already has, no new binding call — beside a
+readout the settings sheet chooses: percent, pages left in the chapter,
+or the chapter and page indices. The title bar shows *Return* only while
+the engine's Back has somewhere to go. A long press selects the word under the finger and the
 drag that follows extends it; the engine paints the selection and the
 view draws the handles, which drag by re-anchoring at the other end. An
 action bar floats beside the selection: highlight, note, copy. A tap on

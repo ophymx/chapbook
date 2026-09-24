@@ -34,6 +34,13 @@ data class Place(
     val spineLen: Int = 0,
     val page: Int = 0,
     val pageCount: Int = 0,
+    /**
+     * Whole-book progress, 0..1, spine-weighted the way the engine's own
+     * `book_progression` is: each unit a `1/spineLen` slice, the page's
+     * place within it added. The shell has every term, so the bar needs
+     * no new binding call.
+     */
+    val bookFraction: Float = 0f,
     /** Whether the engine's Back has anywhere to go — after a link. */
     val canGoBack: Boolean = false,
 )
@@ -86,7 +93,12 @@ class ReaderViewModel(
     private val bookId: Long,
     private val shelf: Shelf,
     private val opener: Opener,
+    private val preferences: Preferences,
 ) : ViewModel(), ComponentCallbacks2 {
+
+    val progressLabel: StateFlow<ProgressLabel> = preferences.progressLabel
+
+    fun setProgressLabel(label: ProgressLabel) = preferences.setProgressLabel(label)
 
     private val _state = MutableStateFlow<ReaderState>(ReaderState.Opening)
     val state: StateFlow<ReaderState> = _state.asStateFlow()
@@ -160,12 +172,17 @@ class ReaderViewModel(
     /** Called by the page after each draw, which is when a position is authoritative. */
     fun moved(position: Position) {
         val s = session ?: return
+        val spineLen = s.spineLen
+        val pageCount = s.pageCount
+        val within = if (pageCount > 0) position.page.toFloat() / pageCount else 0f
+        val bookFraction = if (spineLen > 0) ((position.spine + within) / spineLen).coerceIn(0f, 1f) else 0f
         _place.value = Place(
             title = s.title,
             spine = position.spine,
-            spineLen = s.spineLen,
+            spineLen = spineLen,
             page = position.page,
-            pageCount = s.pageCount,
+            pageCount = pageCount,
+            bookFraction = bookFraction,
             canGoBack = s.canGoBack,
         )
         // Settings can change under a page turn — `font-up` from a
@@ -352,7 +369,7 @@ class ReaderViewModel(
 
         fun factory(app: Application, container: AppContainer, bookId: Long): ViewModelProvider.Factory =
             viewModelFactory {
-                initializer { ReaderViewModel(app, bookId, container.shelf, container.opener) }
+                initializer { ReaderViewModel(app, bookId, container.shelf, container.opener, container.preferences) }
             }
     }
 }

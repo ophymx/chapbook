@@ -26,6 +26,7 @@ class AppContainer(context: Context) {
     val http = Http(credentials)
     val catalogs = Catalogs(context)
     val downloads = Downloads(context)
+    val preferences = Preferences(context)
 
     /**
      * A file another app asked us to open, waiting for a screen to take

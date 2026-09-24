@@ -106,4 +106,11 @@
     <string name="downloading">Downloading %1$s</string>
     <string name="downloaded">%1$s is on your shelf</string>
     <string name="downloads_active">%1$d downloading</string>
+    <string name="progress_percent">%1$d%%</string>
+    <string name="progress_pages_left">%1$d left in chapter</string>
+    <string name="progress_last_page">Last page of chapter</string>
+    <string name="progress_label">Progress</string>
+    <string name="progress_opt_percent">Percent</string>
+    <string name="progress_opt_pages">Pages left</string>
+    <string name="progress_opt_chapter">Chapter &amp; page</string>
 </resources>
