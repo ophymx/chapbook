@@ -141,3 +141,28 @@ fn render_golden_comic_page() {
         "fixtures/render/comic-s0.png",
     );
 }
+
+#[test]
+fn render_golden_night_art_light() {
+    check_golden_of(
+        "fixtures/epub/night-art.epub",
+        0,
+        0,
+        "fixtures/render/night-art-s0p0.png",
+    );
+}
+
+/// The dark scheme is where the fixture earns its keep: its line art is
+/// black on transparent, painted on white by the book and inverted under
+/// `prefers-color-scheme: dark` — white lines on a black box, next to a
+/// colour swatch that no rule touches.
+#[test]
+fn render_golden_night_art_dark() {
+    check_golden_themed(
+        "fixtures/epub/night-art.epub",
+        0,
+        0,
+        "fixtures/render/night-art-s0p0-dark.png",
+        chapbook_core::Theme::Dark,
+    );
+}

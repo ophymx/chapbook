@@ -70,13 +70,13 @@ fn inline_svg_becomes_a_replaced_image() {
         <p>after</p></body></html>"##,
     );
     let mut fonts = fonts();
-    let images = chapbook_layout::collect_images(&doc, Some(&fonts), |_| None);
+    let mut images = chapbook_layout::collect_images(&doc, Some(&fonts), |_| None);
     let (svg_tag, xml) = doc.svg_sources().next().expect("captured inline svg");
     let svg_tag = chapbook_layout::dom::node_tag(svg_tag);
     assert!(xml.contains("<rect"), "subtree serialized: {xml}");
     assert_eq!(images.dims(svg_tag), Some((50, 20)));
 
-    let layout = chapbook_layout::paginate(&doc, &[], &page(), &mut fonts, &images);
+    let layout = chapbook_layout::paginate(&doc, &[], &page(), &mut fonts, &mut images);
     let mut saw_image = false;
     for fragment in layout.pages.iter().flat_map(|p| p.fragments.iter()) {
         match &fragment.kind {
@@ -103,8 +103,8 @@ fn inline_svg_without_rasterizer_output_still_flattens() {
         </body></html>"#,
     );
     let mut fonts = fonts();
-    let images = chapbook_layout::collect_images(&doc, Some(&fonts), |_| None);
-    let layout = chapbook_layout::paginate(&doc, &[], &page(), &mut fonts, &images);
+    let mut images = chapbook_layout::collect_images(&doc, Some(&fonts), |_| None);
+    let layout = chapbook_layout::paginate(&doc, &[], &page(), &mut fonts, &mut images);
     let texts: Vec<String> = layout
         .pages
         .iter()

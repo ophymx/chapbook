@@ -170,7 +170,15 @@ stays that way.
   time), and `Image`. Borders, box backgrounds, rules, and text
   decorations all lower to `FillRect` before they get here, which is what
   keeps a backend small. Layout produces into it; image
-  formats will too.
+  formats will too. CSS `filter` on an image never reaches a backend
+  either: layout asks the `ImageStore` to *derive* a copy — the element's
+  background composited first, then the spec's colour functions
+  (`invert`, `grayscale`, `sepia`, `saturate`, `hue-rotate`, `brightness`,
+  `contrast`, `opacity`; not `blur`/`drop-shadow`/`url`) — and points the
+  fragment at it, so a dark-scheme `invert(100%)` is a different resource
+  id, not a new op. The background rides along because CSS filters the
+  whole element: a book that paints black-on-transparent line art on white
+  and inverts it in the dark wants white-on-black, not white-on-white.
 - **chapbook-render-tinyskia** — swash glyph raster cache, `image`-decoded
   resources, scale applied here. Glyph baselines snap to whole device
   pixels (swash applies cosmic-text's vertical sub-pixel bin in the

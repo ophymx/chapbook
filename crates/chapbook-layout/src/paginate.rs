@@ -32,9 +32,10 @@ use cosmic_text::{Buffer, FontSystem, Metrics, Shaping, Wrap};
 use style::properties::ComputedValues;
 use style::values::computed::LengthPercentage;
 
-use chapbook_core::{PageMetrics, Point, Rect, Rotation, Size};
+use chapbook_core::{PageMetrics, Point, Rect, Rgba, Rotation, Size};
 use chapbook_paint::{
-    BoxDecoration, Decoration, Fragment, FragmentKind, Glyph, GlyphRun, LineFragment, Page,
+    BoxDecoration, Decoration, Fragment, FragmentKind, Glyph, GlyphRun, ImageFilter, ImageStore,
+    LineFragment, Page,
 };
 
 use crate::boxtree::{BlockBox, BlockKind, InlineContent};
@@ -93,6 +94,71 @@ pub(crate) struct Paginator<'f> {
     /// True in the detached sub-paginator that lays out a float's content:
     /// suppresses float interception (floats never nest).
     in_float: bool,
+    /// Images whose element carries a `filter`, to compose into derived
+    /// images once the store can be borrowed for writing (`resolve_filters`).
+    pending_filters: Vec<PendingFilter>,
+}
+
+/// An image fragment waiting for its filtered copy: the element's tag (also
+/// its source resource id), the background CSS would paint under it, and the
+/// filter functions in order.
+pub(crate) struct PendingFilter {
+    pub tag: u64,
+    pub background: Option<Rgba>,
+    pub filters: Vec<ImageFilter>,
+}
+
+/// Point every filtered image fragment at its derived copy. Runs after
+/// pagination, when the box tree that read the store for sizes is gone and
+/// the store can be written. A source the store does not hold stays as it
+/// was — a missing image draws nothing either way.
+pub(crate) fn resolve_filters(
+    pages: &mut [Page],
+    images: &mut ImageStore,
+    pending: Vec<PendingFilter>,
+) {
+    for p in pending {
+        let Some(id) = images.derive(p.tag, p.background, &p.filters) else {
+            continue;
+        };
+        for fragment in pages.iter_mut().flat_map(|page| page.fragments.iter_mut()) {
+            if fragment.tag == p.tag {
+                if let FragmentKind::Image { resource } = &mut fragment.kind {
+                    *resource = id;
+                }
+            }
+        }
+    }
+}
+
+/// The element's `filter`, reduced to the functions a pixel can answer for
+/// itself. `blur()`, `drop-shadow()` and `url()` are dropped: a list of
+/// only those is empty, and the image paints as if unfiltered.
+fn image_filters(style: &ComputedValues) -> Vec<ImageFilter> {
+    use style::values::computed::Filter;
+    let amount = |v: f32| (v.max(0.0) * 1000.0).round().min(f32::from(u16::MAX)) as u16;
+    style
+        .get_effects()
+        .filter
+        .0
+        .iter()
+        .filter_map(|f| match f {
+            Filter::Brightness(v) => Some(ImageFilter::Brightness(amount(v.0))),
+            Filter::Contrast(v) => Some(ImageFilter::Contrast(amount(v.0))),
+            Filter::Grayscale(v) => Some(ImageFilter::Grayscale(amount(v.0))),
+            Filter::HueRotate(a) => Some(ImageFilter::HueRotate(
+                a.degrees().rem_euclid(360.0).round() as i16,
+            )),
+            Filter::Invert(v) => Some(ImageFilter::Invert(amount(v.0))),
+            Filter::Opacity(v) => Some(ImageFilter::Opacity(amount(v.0))),
+            Filter::Saturate(v) => Some(ImageFilter::Saturate(amount(v.0))),
+            Filter::Sepia(v) => Some(ImageFilter::Sepia(amount(v.0))),
+            Filter::Blur(_) | Filter::DropShadow(_) | Filter::Url(_) => {
+                log::debug!("filter function without a pixel-local answer, skipped");
+                None
+            }
+        })
+        .collect()
 }
 
 #[derive(Clone, Copy)]
@@ -164,12 +230,13 @@ impl<'f> Paginator<'f> {
             float_right: None,
             hyphen_cache: std::collections::HashMap::new(),
             in_float: false,
+            pending_filters: Vec::new(),
         };
         p.new_page();
         p
     }
 
-    pub fn finish(mut self) -> (Vec<Page>, Vec<u32>) {
+    pub fn finish(mut self) -> (Vec<Page>, Vec<u32>, Vec<PendingFilter>) {
         // Backfill locator starts for pages that carried no text.
         let mut last = 0u32;
         for loc in &mut self.page_locators {
@@ -179,7 +246,7 @@ impl<'f> Paginator<'f> {
                 last = *loc;
             }
         }
-        (self.pages, self.page_locators)
+        (self.pages, self.page_locators, self.pending_filters)
     }
 
     fn new_page(&mut self) {
@@ -262,7 +329,11 @@ impl<'f> Paginator<'f> {
                 resolve_padding(&p.padding_right, cw),
             )
         };
-        let decoration = if block.anonymous {
+        // An image's ground is its own box, not a band across the measure:
+        // `push_image` paints it at the image's rect — or, under a
+        // `filter`, composes it into the derived image, since CSS filters
+        // the whole element, ground included.
+        let decoration = if block.anonymous || matches!(block.kind, BlockKind::Image { .. }) {
             None
         } else {
             box_decoration_of(style)
@@ -521,6 +592,41 @@ impl<'f> Paginator<'f> {
         }
     }
 
+    /// Emit an image fragment with what its element's style adds. A
+    /// background (or border) is a box decoration at the image's own rect
+    /// — the element's border box, which is the image — rather than the
+    /// full-measure band `place_block` gives a block. Under a `filter` the
+    /// background travels *with* the filter instead, into a derived image
+    /// composed after pagination (`resolve_filters`), because CSS filters
+    /// the whole element, ground included; the fragment is then pointed at
+    /// that copy, and a border is not painted under it.
+    fn push_image(&mut self, block: &BlockBox, rect: Rect) {
+        let tag = crate::dom::node_tag(block.node);
+        let decoration = box_decoration_of(&block.style);
+        let filters = image_filters(&block.style);
+        let page = self.pages.last_mut().unwrap();
+        if filters.is_empty() {
+            if let Some(decoration) = decoration {
+                page.fragments.push(Fragment {
+                    rect,
+                    kind: FragmentKind::Box(decoration),
+                    tag,
+                });
+            }
+        } else {
+            self.pending_filters.push(PendingFilter {
+                tag,
+                background: decoration.and_then(|d| d.background),
+                filters,
+            });
+        }
+        self.pages.last_mut().unwrap().fragments.push(Fragment {
+            rect,
+            kind: FragmentKind::Image { resource: tag },
+            tag,
+        });
+    }
+
     /// Place a replaced image block: scaled to fit the content width and
     /// page height, kept whole (an image never splits across pages), and
     /// centered horizontally.
@@ -547,13 +653,7 @@ impl<'f> Paginator<'f> {
             ),
             size: Size::new(w, h),
         };
-        self.pages.last_mut().unwrap().fragments.push(Fragment {
-            rect,
-            kind: FragmentKind::Image {
-                resource: crate::dom::node_tag(block.node),
-            },
-            tag: crate::dom::node_tag(block.node),
-        });
+        self.push_image(block, rect);
         self.y += h;
         self.placed_on_page += 1;
     }
@@ -742,13 +842,7 @@ impl<'f> Paginator<'f> {
             ),
             size: Size::new(w, h),
         };
-        self.pages.last_mut().unwrap().fragments.push(Fragment {
-            rect,
-            kind: FragmentKind::Image {
-                resource: crate::dom::node_tag(block.node),
-            },
-            tag: crate::dom::node_tag(block.node),
-        });
+        self.push_image(block, rect);
         self.placed_on_page += 1;
         let band = FloatBand {
             width: ml + w + mr,
@@ -801,7 +895,8 @@ impl<'f> Paginator<'f> {
         let mut sub = Paginator::new(&mut *self.fonts, sub_metrics);
         sub.in_float = true;
         sub.place_block(block, 0.0, margin_box_w);
-        let (mut sub_pages, _) = sub.finish();
+        let (mut sub_pages, _, sub_pending) = sub.finish();
+        self.pending_filters.extend(sub_pending);
         let fragments = std::mem::take(&mut sub_pages[0].fragments);
         let height = fragments
             .iter()

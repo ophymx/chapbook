@@ -271,7 +271,7 @@ impl Session {
                 }
             }
         }
-        let images = chapbook_layout::collect_images(&doc, Some(&self.fonts), |img_href| {
+        let mut images = chapbook_layout::collect_images(&doc, Some(&self.fonts), |img_href| {
             epub.resource(&href, img_href).ok().map(|r| r.data)
         });
 
@@ -289,7 +289,8 @@ impl Session {
         // Field access, not `unit_mut`: `epub` borrows `self.book` for
         // the rest of this function.
         self.units.entry(spine).or_default().links = Some(dom::links(&doc));
-        let layout = chapbook_layout::paginate(&doc, &sheets, metrics, &mut self.fonts, &images);
+        let layout =
+            chapbook_layout::paginate(&doc, &sheets, metrics, &mut self.fonts, &mut images);
         Some((layout, images))
     }
 }

@@ -119,7 +119,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             engine.style_document(&mut doc);
         });
 
-        let images = assets.time(|| {
+        let mut images = assets.time(|| {
             for face in chapbook_layout::extract_font_faces(&css) {
                 if !registered.insert(face.family.clone()) {
                     continue;
@@ -137,8 +137,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             })
         });
 
-        let layout = paginate
-            .time(|| chapbook_layout::paginate(&doc, &sheet_text, &metrics, &mut fonts, &images));
+        let layout = paginate.time(|| {
+            chapbook_layout::paginate(&doc, &sheet_text, &metrics, &mut fonts, &mut images)
+        });
         pages += layout.pages.len();
         chapters += 1;
 

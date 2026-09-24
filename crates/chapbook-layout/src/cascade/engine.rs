@@ -209,8 +209,15 @@ fn theme_css(theme: chapbook_core::Theme) -> Option<String> {
         Theme::Sepia => Some(format!(
             ":root {{ color: {fg}; }}\na {{ color: {link}; }}\n"
         )),
+        // Every background but an image's: for a picture the ground is
+        // part of the picture. Line art shipped black on transparent is
+        // given a white ground by its book precisely so night mode does
+        // not lose it, and Standard Ebooks paints its realistic plates
+        // on `currentColor` in the dark for the same reason — a rule the
+        // blanket strip used to override, leaving black lines on black.
         Theme::Dark => Some(format!(
-            "* {{ color: {fg} !important; background-color: transparent !important; }}\n\
+            "* {{ color: {fg} !important; }}\n\
+             *:not(img) {{ background-color: transparent !important; }}\n\
              a {{ color: {link} !important; }}\n"
         )),
     }
