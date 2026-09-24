@@ -36,6 +36,19 @@ While iterating on the Rust, `-Profile debug` and
 `-p:ChapbookProfile=debug` are minutes faster and the tests say the same
 thing.
 
+The binding itself is `net9.0`, not `net9.0-windows`, so the same tests
+run on a Mac or a Linux box against the dylib or `.so` that
+`cargo build -p chapbook-ffi` leaves in `target/<profile>/`:
+
+```sh
+cargo build -p chapbook-ffi
+dotnet test windows/Chapbook.Tests/Chapbook.Tests.csproj -p:ChapbookProfile=debug
+```
+
+(With Homebrew's keg-only `dotnet@9`, put `$(brew --prefix dotnet@9)/bin`
+on `PATH` and set `DOTNET_ROOT` to its `libexec`.) The WinUI and WPF
+projects still need Windows.
+
 The DLL is a build product and is not checked in. `Chapbook.csproj` copies
 it beside the assembly from `target/<profile>/` and *warns* rather than
 fails when it is absent, because the managed half compiles perfectly well

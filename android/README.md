@@ -24,8 +24,8 @@ sdkmanager --install "ndk;28.2.13676358"
 rustup target add aarch64-linux-android x86_64-linux-android
 cargo install cargo-ndk
 
-export ANDROID_NDK_HOME=$HOME/Android/Sdk/ndk/<version>
-export ANDROID_HOME=$HOME/Android/Sdk
+export ANDROID_NDK_HOME=$HOME/Android/Sdk/ndk/<version>   # macOS: ~/Library/Android/sdk/ndk/<version>
+export ANDROID_HOME=$HOME/Android/Sdk                      # macOS: ~/Library/Android/sdk
 ./android/build-jni.sh release
 cd android && ./gradlew :demo:assembleDebug
 ./gradlew :chapbook:connectedDebugAndroidTest   # with a device or AVD attached

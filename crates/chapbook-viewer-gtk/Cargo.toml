@@ -8,10 +8,11 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 
-# Linux only. gtk4-sys probes for gtk4.pc through pkg-config, so every
+# Linux by default. gtk4-sys probes for gtk4.pc through pkg-config, so every
 # dependency here is unbuildable on a stock macOS or Windows box — including
 # the chapbook crates, which nothing outside `src/linux.rs` uses. Off this
-# target the crate is a stub `main` and no dependencies at all.
+# target the crate is a stub `main` and no dependencies at all — except on
+# a Mac that asks, below.
 [target.'cfg(target_os = "linux")'.dependencies]
 chapbook-core = { workspace = true }
 chapbook-reader = { workspace = true, features = ["cbz", "pdf", "opds", "svg", "mathml"] }
@@ -26,3 +27,24 @@ gtk4 = { version = "0.11", features = ["v4_16"] }
 # main context, where it may touch a session that is not.
 futures-channel = { workspace = true }
 futures-util = { workspace = true }
+
+# The same shell on macOS, opt-in: Homebrew's gtk4 puts gtk4.pc where
+# pkg-config finds it, and GTK's Quartz backend draws the same widgets.
+# Opt-in so `cargo test --workspace` on a stock Mac stays GTK-free.
+[target.'cfg(target_os = "macos")'.dependencies]
+chapbook-core = { workspace = true, optional = true }
+chapbook-reader = { workspace = true, features = ["cbz", "pdf", "opds", "svg", "mathml"], optional = true }
+chapbook-render-tinyskia = { workspace = true, optional = true }
+gtk4 = { version = "0.11", features = ["v4_16"], optional = true }
+futures-channel = { workspace = true, optional = true }
+futures-util = { workspace = true, optional = true }
+
+[features]
+macos = [
+    "dep:chapbook-core",
+    "dep:chapbook-reader",
+    "dep:chapbook-render-tinyskia",
+    "dep:gtk4",
+    "dep:futures-channel",
+    "dep:futures-util",
+]

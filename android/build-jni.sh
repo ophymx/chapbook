@@ -4,6 +4,9 @@
 #
 # cargo-ndk's -o writes the `<abi>/lib*.so` layout Gradle expects, so
 # nothing is copied by hand and the .so is never checked in.
+#
+# Portable shell on purpose: BSD `stat` has no `-c` and BSD `grep` no `-P`,
+# and a Mac with Android Studio is a place this runs.
 set -euo pipefail
 
 : "${ANDROID_NDK_HOME:?set ANDROID_NDK_HOME to e.g. \$HOME/Android/Sdk/ndk/<version>}"
@@ -24,7 +27,7 @@ status=0
 
 for so in "$out"/*/libchapbook_jni.so; do
     abi="$(basename "$(dirname "$so")")"
-    printf '%-10s %s  %s bytes\n' "$abi" "$so" "$(stat -c%s "$so")"
+    printf '%-10s %s  %s bytes\n' "$abi" "$so" "$(wc -c < "$so" | tr -d ' ')"
 
     # A missing `#[link(name = ...)]` leaves the AndroidBitmap symbols
     # undefined with nothing in DT_NEEDED to resolve them. The build stays
@@ -44,7 +47,7 @@ for so in "$out"/*/libchapbook_jni.so; do
             echo "  !! Native.$fn is declared in Kotlin but not exported by the .so" >&2
             status=1
         fi
-    done < <(grep -oP 'external fun \K[a-zA-Z0-9_]+' "$native")
+    done < <(sed -n 's/.*external fun \([a-zA-Z0-9_]*\).*/\1/p' "$native")
 done
 
 # ---- The C ABI, checked against Android without Android consuming it ----

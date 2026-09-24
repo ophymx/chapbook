@@ -165,7 +165,11 @@ pure-Rust parser — so skipping `chapbook-viewer-gtk` needs no system
 packages at all. Off Linux you skip it whether you meant to or not: `gtk4`
 is a target-gated dependency, the crate compiles to a stub `main`, and
 `cargo test --workspace` runs on macOS and Windows without GTK or
-pkg-config installed. `chapbook-viewer-win32` is the mirror image and needs
+pkg-config installed. On a Mac that has `brew install gtk4 libadwaita`,
+the two GTK crates opt back in behind a `macos` feature, so the GTK shells
+can be developed there against the same widgets under GTK's Quartz
+backend; the feature is off by default so a stock Mac stays GTK-free.
+`chapbook-viewer-win32` is the mirror image and needs
 nothing either way: the `windows` crate is metadata and an import library,
 not a system package, so the crate is gated to Windows because a viewer
 that cannot open a window is worse than one that says so at compile time.
@@ -173,7 +177,9 @@ that cannot open a window is worse than one that says so at compile time.
 ```sh
 cargo run -p chapbook-viewer -- <book.epub|comic.cbz|doc.pdf|opds-url>
 cargo run -p chapbook-viewer -- --gpu <book.epub>   # vello + wgpu
-cargo run -p chapbook-viewer-gtk -- <book.epub>     # GTK4, Linux only
+cargo run -p chapbook-viewer-gtk -- <book.epub>     # GTK4, Linux
+cargo run -p chapbook-app-gtk                        # the GTK application, Linux
+cargo run -p chapbook-app-gtk --features macos       # …or macOS with Homebrew GTK
 cargo run -p chapbook-viewer-win32 -- <book.epub>   # Win32, Windows only
 cargo run -p chapbook-cli -- --help                 # the `chapbook` dev CLI
 ```
