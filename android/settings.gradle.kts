@@ -14,4 +14,4 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "chapbook-android"
-include(":chapbook", ":demo")
+include(":chapbook", ":demo", ":app")
