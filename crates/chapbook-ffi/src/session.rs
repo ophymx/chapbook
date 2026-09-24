@@ -1276,6 +1276,42 @@ pub unsafe extern "C" fn cb_session_release_caches(session: *mut cb_session) -> 
     })
 }
 
+/// Persist the reading position without giving anything up.
+///
+/// `cb_session_suspend` does this too, but only on the way out. A shell
+/// leaving a book for another screen, or a sync that wants the latest
+/// position, wants it on its own — and closing a session does **not**
+/// save, so a book closed without one of the two reopens where it was
+/// last saved. A session with no library has nowhere to write and this
+/// is a no-op, not an error.
+#[no_mangle]
+pub unsafe extern "C" fn cb_session_save_position(session: *mut cb_session) -> cb_status {
+    guard(cb_status::CB_ERR_PANIC, || {
+        let session = session_mut!(session);
+        session.inner.save_position();
+        cb_status::CB_OK
+    })
+}
+
+/// Say how much the caches may hold, evicting at once if they are over
+/// it. The unit on screen is never evicted.
+///
+/// Runtime rather than construction-only because memory pressure is a
+/// runtime event: `cb_config_set_cache_budget` sizes the caches for the
+/// device, and this lowers them from a trim warning — halving on a real
+/// one keeps the next warning from finding the same cache.
+#[no_mangle]
+pub unsafe extern "C" fn cb_session_set_cache_budget(
+    session: *mut cb_session,
+    bytes: usize,
+) -> cb_status {
+    guard(cb_status::CB_ERR_PANIC, || {
+        let session = session_mut!(session);
+        session.inner.set_cache_budget(bytes);
+        cb_status::CB_OK
+    })
+}
+
 /// Bytes the caches currently hold.
 #[no_mangle]
 pub unsafe extern "C" fn cb_session_cache_bytes(

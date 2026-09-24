@@ -99,13 +99,15 @@ class CatalogViewModel(
         }
     }
 
-    /** Enqueue a publication's download, described while the feed is open. */
+    /**
+     * Enqueue a publication's download. The entry carries its own request,
+     * captured when its row was read, so this needs neither the catalog
+     * nor the feed it came from — which may be pages back.
+     */
     fun download(entry: CatalogEntry, onQueued: () -> Unit) {
-        viewModelScope.launch {
-            val request = session.use { downloadRequest(entry) } ?: return@launch
-            downloads.enqueue(request)
-            onQueued()
-        }
+        val request = entry.download ?: return
+        downloads.enqueue(request)
+        onQueued()
     }
 
     fun applyFacet(facet: Facet) = open(facet.href)

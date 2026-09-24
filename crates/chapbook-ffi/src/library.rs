@@ -924,6 +924,28 @@ unsafe fn sync_target(
     unsafe { str_out(&url, buf, cap, needed) }
 }
 
+/// Drop this book's own settings override so it follows the reader's
+/// default again, applying that default now and keeping the place.
+///
+/// The undo for a `cb_session_set_settings` with `CB_SCOPE_THIS_BOOK`:
+/// a "forget this book's settings" control. The chosen font family goes
+/// with it, since it travels on the same override. A no-op for a book
+/// that never reached the library.
+#[no_mangle]
+pub unsafe extern "C" fn cb_session_clear_book_settings(session: *mut cb_session) -> cb_status {
+    guard(cb_status::CB_ERR_PANIC, || {
+        with_library!((session) {
+            // SAFETY: a handle from an open call, not yet closed.
+            let session = match unsafe { session.as_mut() } {
+                Some(session) => session,
+                None => return fail(cb_status::CB_ERR_NULL_ARGUMENT, "session is null"),
+            };
+            session.inner.clear_book_settings();
+            cb_status::CB_OK
+        })
+    })
+}
+
 /// The library row the open session is reading.
 ///
 /// The join between the reading view and the shelf: a session *imports*

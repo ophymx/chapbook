@@ -5,6 +5,12 @@ enum class EntryKind { NAVIGATION, PUBLICATION }
 
 /** One row of a catalog listing. */
 data class CatalogEntry(
+    /**
+     * The row's index in the held feed, valid until the next fetch — which
+     * is why nothing that matters is looked up by it: a screen that pages
+     * appends rows from one feed after another, and an index into a feed
+     * that is gone names the wrong book in the one that replaced it.
+     */
     val index: Int,
     val kind: EntryKind,
     val title: String,
@@ -22,6 +28,13 @@ data class CatalogEntry(
     /** Whether the entry advertises the two sync services. */
     val syncsPosition: Boolean,
     val syncsAnnotations: Boolean,
+    /**
+     * Everything needed to fetch this row yourself, captured when the row
+     * was read — so it travels with the entry and stays right after the
+     * feed has moved on to its next page. Null where there is nothing to
+     * fetch: a navigation row, a purchase-only entry.
+     */
+    val download: DownloadRequest?,
 )
 
 /**
@@ -176,6 +189,7 @@ class Catalog(transport: SyncTransport) : AutoCloseable {
                 isOpenAccess = flags[3] != 0L,
                 syncsPosition = flags[6] != 0L,
                 syncsAnnotations = flags[7] != 0L,
+                download = downloadRequest(index),
             )
         }
     }
@@ -221,17 +235,22 @@ class Catalog(transport: SyncTransport) : AutoCloseable {
         Native.catalogDownload(handle, entry.index, libraryDir).takeIf { it > 0 }
 
     /**
-     * Describe an entry's download so the app can run it itself, or null
-     * where the row has nothing to fetch.
+     * An entry's download so the app can run it itself, or null where the
+     * row has nothing to fetch.
      *
-     * Cheap and local: it reads the held feed and touches no network. Do
-     * it while the catalog is open, because the entry is the only place
-     * the sync services exist — see [DownloadRequest].
+     * The entry carries it — [entries] captured it when the row was read —
+     * so this touches neither the network nor the held feed, and answers
+     * the same after any number of later fetches. That is the point: a
+     * paging screen holds rows from feeds the catalog no longer does, and
+     * the sync services exist nowhere but in those rows.
      */
-    fun downloadRequest(entry: CatalogEntry): DownloadRequest? =
-        downloadRequest(entry.index)
+    fun downloadRequest(entry: CatalogEntry): DownloadRequest? = entry.download
 
-    /** [downloadRequest] by index, for a host that kept only that. */
+    /**
+     * The download of the held feed's row at [index], for a host that kept
+     * only that. Valid until the next fetch, like the index itself; a row
+     * from an earlier page is not here.
+     */
     fun downloadRequest(index: Int): DownloadRequest? {
         val url = Native.catalogEntryText(handle, index, 9) ?: return null
         return DownloadRequest(

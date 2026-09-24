@@ -213,6 +213,15 @@ jobs:
       # header that drifted from the library it ships beside passes both
       # steps above and fails here.
       - run: ./ios/demo/build.sh
+      # The application's model — custody, the shelf, catalogs, downloads
+      # as jobs, the reader's flows — driven on the macOS slice the same
+      # way the library is, then the screens compiled and linked for the
+      # simulator, which is the only place SwiftUI over UIKit compiles at
+      # all. Together they are the iOS half of what the Android app's
+      # instrumented tests would cover, if CI had an emulator.
+      - run: swift test
+        working-directory: ios/App
+      - run: ./ios/App/build.sh
 
   reader-features:
     # chapbook-reader's formats are separately compilable, and a device

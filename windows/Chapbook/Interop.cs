@@ -281,6 +281,15 @@ internal static partial class Interop
     internal static partial Status cb_session_release_caches(nint session);
 
     [LibraryImport(Library)]
+    internal static partial Status cb_session_save_position(nint session);
+
+    [LibraryImport(Library)]
+    internal static partial Status cb_session_set_cache_budget(nint session, nuint bytes);
+
+    [LibraryImport(Library)]
+    internal static partial Status cb_session_clear_book_settings(nint session);
+
+    [LibraryImport(Library)]
     internal static partial Status cb_session_cache_bytes(nint session, out nuint bytes);
 
     [LibraryImport(Library)]
