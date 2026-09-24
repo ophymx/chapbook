@@ -43,8 +43,11 @@ public final class Catalog {
     /// platform's image loader is for. Send the same `Authorization`
     /// with them if the catalog wants one.
     public struct Entry: Hashable, Sendable {
-        /// The row's index in the held feed, which is what a download
-        /// takes. Valid until the next `fetch(_:)` or `search(_:)`.
+        /// The row's index in the held feed. Valid until the next
+        /// `fetch(_:)` or `search(_:)` — which is why nothing that matters
+        /// is looked up by it: a screen that pages appends rows from one
+        /// feed after another, and an index into the feed that is gone
+        /// would name the wrong book in the one that replaced it.
         public let index: Int
         public let kind: EntryKind
         public let title: String
@@ -80,6 +83,11 @@ public final class Catalog {
         public let syncsPosition: Bool
         /// Likewise, an annotation container.
         public let syncsAnnotations: Bool
+        /// Everything needed to fetch this row yourself, captured when the
+        /// row was read — so it travels with the entry and stays right
+        /// after the feed has moved on to its next page. `nil` where there
+        /// is nothing to fetch: a navigation row, a purchase-only entry.
+        public let download: DownloadRequest?
     }
 
     /// One facet: a way to narrow the held feed, as the catalog offers
@@ -220,7 +228,8 @@ public final class Catalog {
                     canDownload: row.can_download,
                     isOpenAccess: row.is_open_access,
                     syncsPosition: row.syncs_position,
-                    syncsAnnotations: row.syncs_annotations))
+                    syncsAnnotations: row.syncs_annotations,
+                    download: try downloadRequest(entryAt: index)))
         }
         return entries
     }
@@ -306,7 +315,7 @@ public final class Catalog {
     /// `URLSessionTask.taskDescription` is one string. Encode it there,
     /// or into whatever the app already persists jobs in, and decode it
     /// in the delegate that gets the completed file.
-    public struct DownloadRequest: Sendable, Codable {
+    public struct DownloadRequest: Hashable, Sendable, Codable {
         /// The acquisition to fetch. The one field that is not advice.
         public let url: URL
         /// Send these, plus whatever the app sends of its own.
@@ -358,17 +367,21 @@ public final class Catalog {
         }
     }
 
-    /// Describe an entry's download so the app can run it itself, or
-    /// `nil` where the row has nothing to fetch.
+    /// An entry's download so the app can run it itself, or `nil` where
+    /// the row has nothing to fetch.
     ///
-    /// Cheap and local: it reads the held feed and touches no network. Do
-    /// it while the catalog is open, because the entry is the only place
-    /// the sync services exist — see ``DownloadRequest``.
-    public func downloadRequest(_ entry: Entry) throws -> DownloadRequest? {
-        try downloadRequest(entryAt: entry.index)
+    /// The entry carries it — `entries()` captured it when the row was
+    /// read — so this touches neither the network nor the held feed, and
+    /// answers the same after any number of later fetches. That is the
+    /// point: a paging screen holds rows from feeds the catalog no longer
+    /// does, and the sync services exist nowhere but in those rows.
+    public func downloadRequest(_ entry: Entry) -> DownloadRequest? {
+        entry.download
     }
 
-    /// ``downloadRequest(_:)`` by index, for a host that kept only that.
+    /// The download of the held feed's row at `index`, for a host that
+    /// kept only that. Valid until the next `fetch(_:)` or `search(_:)`,
+    /// like the index itself; a row from an earlier page is not here.
     public func downloadRequest(entryAt index: Int) throws -> DownloadRequest? {
         guard let url = try text(index, CB_ENTRY_DOWNLOAD_URL).flatMap(URL.init) else {
             return nil

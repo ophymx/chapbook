@@ -192,7 +192,7 @@ func aDownloadTheAppRunsItselfIsDescribedWhileTheFeedIsStillOpen() throws {
     try catalog.fetch(syncingShelf)
 
     let entry = try #require(try catalog.entries().first { $0.kind == .publication })
-    let request = try #require(try catalog.downloadRequest(entry))
+    let request = try #require(catalog.downloadRequest(entry))
 
     // The one field that is not advice, and it crossed absolute — a host
     // resolves nothing itself.
@@ -263,7 +263,28 @@ func aDownloadTheAppRunsItselfIsDescribedWhileTheFeedIsStillOpen() throws {
     try catalog.fetch(root)
     let section = try #require(try catalog.entries().first { $0.kind == .navigation })
     #expect(section.href != nil, "the row does have a link, just not one to fetch")
-    #expect(try catalog.downloadRequest(section) == nil)
+    #expect(catalog.downloadRequest(section) == nil)
+}
+
+/// The bug this exists for: a screen that pages appends rows from feed
+/// after feed, and a Get on a row from the first page used to describe
+/// whatever the *current* feed held at that index. The entry carries its
+/// own download now, so the row outlives the feed it came from.
+@Test(.enabled(if: opdsBuilt))
+func aDescribedDownloadOutlivesTheFeedItCameFrom() throws {
+    let catalog = try stubbedCatalog()
+    try catalog.fetch(newReleases)
+    let comic = try #require(try catalog.entries().first { $0.href?.pathExtension == "cbz" })
+    let request = try #require(catalog.downloadRequest(comic))
+    #expect(request.url == URL(string: "\(origin)/dl/demo/c12.cbz"))
+
+    // The next page arrives and the held feed is a different one.
+    try catalog.fetch(syncingShelf)
+    #expect(catalog.downloadRequest(comic) == request)
+    // By index is the held feed's row, which is the wrong book — or no
+    // row at all — and is exactly what a paging screen must not ask.
+    let held: Catalog.DownloadRequest? = (try? catalog.downloadRequest(entryAt: comic.index)) ?? nil
+    #expect(held?.url != request.url)
 }
 
 @Test(.enabled(if: opdsBuilt))

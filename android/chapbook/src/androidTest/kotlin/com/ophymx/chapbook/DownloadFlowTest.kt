@@ -151,6 +151,30 @@ class DownloadFlowTest {
         }
     }
 
+    /**
+     * The bug this exists for: a screen that pages appends rows from feed
+     * after feed, and a Get on a row from the first page used to describe
+     * whatever the *current* feed held at that index. The entry carries
+     * its own download now, so the row outlives the feed it came from.
+     */
+    @Test
+    fun aDescribedDownloadOutlivesTheFeedItCameFrom() {
+        Catalog(FixtureCatalog()).use { catalog ->
+            catalog.fetch(SYNCING_SHELF)
+            val entry = catalog.entries().first { it.kind == EntryKind.PUBLICATION }
+            val request = required(catalog.downloadRequest(entry))
+            assertEquals("$ORIGIN/dl/sync/v3.epub", request.url)
+
+            // The next page arrives and the held feed is a different one:
+            // the root, whose rows are all navigation.
+            catalog.fetch(ROOT)
+            assertEquals(request, catalog.downloadRequest(entry))
+            // By index is the held feed's row, which has nothing to fetch —
+            // exactly what a paging screen must not ask.
+            assertNull(catalog.downloadRequest(entry.index))
+        }
+    }
+
     // ---- Completing ----
 
     @Test
