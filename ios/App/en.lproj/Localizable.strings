@@ -95,3 +95,12 @@
 "password" = "Password";
 "sign_in_unavailable" = "This catalog needs a sign-in method the app cannot offer.";
 "downloads_active" = "%d downloading";
+
+/* Progress */
+"progress_percent" = "%d%%";
+"progress_pages_left" = "%d left in chapter";
+"progress_last_page" = "Last page of chapter";
+"progress_label" = "Progress";
+"progress_opt_percent" = "Percent";
+"progress_opt_pages" = "Pages left";
+"progress_opt_chapter" = "Chapter & page";

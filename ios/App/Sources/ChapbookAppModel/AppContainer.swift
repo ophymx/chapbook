@@ -23,6 +23,7 @@ public final class AppContainer: ObservableObject {
     public let http: Http
     public let catalogs: Catalogs
     public let downloads: Downloads
+    public let preferences: Preferences
 
     /// A file another app asked us to open, waiting for the shelf to take
     /// it. Set from `onOpenURL`, cleared by whoever handles it.
@@ -60,6 +61,7 @@ public final class AppContainer: ObservableObject {
         opener = Opener(libraryDirectory: libraryDirectory, shelf: shelf, grants: grants, container: container)
         http = Http(credentials: credentials)
         catalogs = Catalogs(defaults: defaults)
+        preferences = Preferences(defaults: defaults)
         self.downloads = Downloads(
             configuration: configuration, credentials: credentials, shelf: shelf,
             staging: libraryDirectory.appendingPathComponent("downloads", isDirectory: true))

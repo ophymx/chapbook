@@ -204,6 +204,19 @@ struct SettingsSheet: View {
                             ForEach(families, id: \.self) { family in Text(family).tag(family) }
                         }
                     }
+                    Section(L("progress_label")) {
+                        Picker(
+                            L("progress_label"),
+                            selection: Binding(
+                                get: { vm.preferences.progressLabel },
+                                set: { vm.preferences.setProgressLabel($0) })
+                        ) {
+                            Text(L("progress_opt_percent")).tag(ProgressLabel.percent)
+                            Text(L("progress_opt_pages")).tag(ProgressLabel.pagesLeft)
+                            Text(L("progress_opt_chapter")).tag(ProgressLabel.chapterPage)
+                        }
+                        .pickerStyle(.segmented)
+                    }
                     Section {
                         Toggle(L("scope_this_book"), isOn: $thisBook)
                         Text(L("scope_hint")).font(.caption).foregroundStyle(.secondary)
