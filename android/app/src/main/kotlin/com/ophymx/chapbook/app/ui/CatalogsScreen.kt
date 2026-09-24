@@ -115,9 +115,8 @@ fun CatalogsScreen(onOpen: (String) -> Unit, onBack: () -> Unit) {
                 TextButton(
                     enabled = url.isNotBlank(),
                     onClick = {
-                        val added = vm.add(url)
+                        vm.add(url) { added -> onOpen(added.id) }
                         adding = false
-                        onOpen(added.id)
                     },
                 ) { Text(stringResource(R.string.add)) }
             },

@@ -321,6 +321,7 @@ pub unsafe extern "C" fn cb_config_set_http_transport(
         {
             config.inner.transport = Some(std::sync::Arc::new(host::HostTransport {
                 get,
+                send: None,
                 finalize,
                 user: user as usize,
             }));
@@ -329,6 +330,64 @@ pub unsafe extern "C" fn cb_config_set_http_transport(
         #[cfg(not(feature = "opds"))]
         {
             let (_, _) = (config, get);
+            decline(
+                cb_status::CB_ERR_FORMAT_NOT_BUILT,
+                "this build has no OPDS support, so a transport would have \
+                 nothing to carry",
+            )
+        }
+    })
+}
+
+/// Fetch *and write* through the host's networking: the transport a sync
+/// driver needs, installed on a config so that
+/// [`cb_app_open`](crate::cb_app_open) can take it from there.
+///
+/// Everything [`cb_config_set_http_transport`] says holds, and `send`
+/// carries the write half — POST, PUT and DELETE against a book's
+/// services — under [`cb_http_send_fn`]'s contract. `send` may be null,
+/// in which case the transport reads and every write reports that it
+/// cannot; a host with no sync to run loses nothing by leaving it so.
+#[no_mangle]
+pub unsafe extern "C" fn cb_config_set_http_transport_full(
+    config: *mut cb_config,
+    get: cb_http_get_fn,
+    send: cb_http_send_fn,
+    finalize: cb_http_finalize_fn,
+    user: *mut c_void,
+) -> cb_status {
+    guard(cb_status::CB_ERR_PANIC, || {
+        let decline = |code, message| {
+            if let Some(finalize) = finalize {
+                // SAFETY: the host's own finalizer with the host's own
+                // pointer, called exactly once.
+                unsafe { finalize(user) };
+            }
+            fail(code, message)
+        };
+        // SAFETY: a handle from `cb_config_new`, not yet consumed.
+        let Some(config) = (unsafe { config.as_mut() }) else {
+            return decline(cb_status::CB_ERR_NULL_ARGUMENT, "config is null");
+        };
+        let Some(get) = get else {
+            return decline(
+                cb_status::CB_ERR_NULL_ARGUMENT,
+                "get callback is null; a transport that cannot fetch is not one",
+            );
+        };
+        #[cfg(feature = "opds")]
+        {
+            config.inner.transport = Some(std::sync::Arc::new(host::HostTransport {
+                get,
+                send,
+                finalize,
+                user: user as usize,
+            }));
+            cb_status::CB_OK
+        }
+        #[cfg(not(feature = "opds"))]
+        {
+            let (_, _, _) = (config, get, send);
             decline(
                 cb_status::CB_ERR_FORMAT_NOT_BUILT,
                 "this build has no OPDS support, so a transport would have \
@@ -354,6 +413,8 @@ pub(crate) mod host {
     pub(crate) struct HostTransport {
         pub get:
             unsafe extern "C" fn(*const cb_http_request, *mut super::cb_http_response, *mut c_void),
+        /// The write half, when the host gave one.
+        pub send: super::cb_http_send_fn,
         pub finalize: cb_http_finalize_fn,
         /// The host's pointer, stored as an address so the compiler does
         /// not have to take our word for `Send + Sync` field by field.
@@ -443,6 +504,33 @@ pub(crate) mod host {
                 // SAFETY: the callback the host installed, with pointers
                 // valid for exactly this call.
                 unsafe { (self.get)(raw, &mut response, self.user()) }
+            })?;
+            response.settle()
+        }
+
+        fn send(
+            &self,
+            method: chapbook_reader::chapbook_opds::http::HttpMethod,
+            request: HttpRequest,
+            body: Option<Vec<u8>>,
+        ) -> Result<HttpResponse, HttpError> {
+            let Some(send) = self.send else {
+                return Err(HttpError::new(
+                    "the host transport has no send callback, so it cannot write",
+                ));
+            };
+            let method = CString::new(method.as_str()).expect("method tokens contain no NUL");
+            let mut response = super::cb_http_response::default();
+            let body = body.unwrap_or_default();
+            let (bytes, len) = if body.is_empty() {
+                (std::ptr::null(), 0)
+            } else {
+                (body.as_ptr(), body.len())
+            };
+            with_c_request(&request, |raw| {
+                // SAFETY: the callback the host installed, with pointers
+                // valid for exactly this call.
+                unsafe { send(method.as_ptr(), raw, bytes, len, &mut response, self.user()) }
             })?;
             response.settle()
         }

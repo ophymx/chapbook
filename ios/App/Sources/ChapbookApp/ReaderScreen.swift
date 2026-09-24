@@ -218,7 +218,7 @@ struct ReaderScreen: View {
 
 /// The whole-book bar, and a readout whose words are the reader's choice.
 private struct ProgressReadout: View {
-    let place: Place
+    let place: ChapbookAppModel.Place
     @ObservedObject var preferences: Preferences
 
     private var text: String {

@@ -23,78 +23,76 @@ public enum CatalogUI: Sendable {
     case failed(URL)
 }
 
-/// A browsing session over one saved catalog.
+/// A browsing session over one saved catalog, as a screen sees it.
 ///
-/// The `CatalogSession` owns the blocking catalog on its own queue; this
-/// turns feeds into screens and taps into fetches. A navigation row is a
-/// fetch that pushes a crumb; a publication row is a download the app
-/// enqueues; a facet or a page is a fetch that replaces or appends. A
-/// 401 surfaces as a login rather than a failure, and a sign-in stores
-/// the credential by origin and fetches again.
+/// The decisions are the engine's: a navigation row pushes a crumb, Back
+/// walks the crumbs before it leaves the screen, a facet replaces and a
+/// page appends, a 401 is a login rather than a failure, and a sign-in
+/// stores the credential by origin and fetches again. This turns each of
+/// those into a hop onto the catalog's queue and a snapshot of what it
+/// holds afterwards. The one thing mirrored here is the crumb depth, so
+/// Back can answer at once whether it stays inside the catalog.
 @MainActor
 public final class CatalogViewModel: ObservableObject {
     @Published public private(set) var ui: CatalogUI = .opening
 
     public let saved: SavedCatalog
     private let session: CatalogSession
-    private let credentials: Credentials
     private let downloads: Downloads
-    private var crumbs: [URL] = []
+    /// How many crumbs the engine's trail holds — every `go` pushes one.
+    private var depth = 0
 
-    public init(saved: SavedCatalog, session: CatalogSession, credentials: Credentials, downloads: Downloads) {
+    public init(saved: SavedCatalog, session: CatalogSession, downloads: Downloads) {
         self.saved = saved
         self.session = session
-        self.credentials = credentials
         self.downloads = downloads
         if let root = URL(string: saved.url) {
-            open(root)
+            go(root)
         } else {
             ui = .failed(URL(fileURLWithPath: "/"))
         }
     }
 
-    private func open(_ url: URL, pushCrumb: Bool = true) {
-        if pushCrumb { crumbs.append(url) }
-        ui = .feed(Browsing(url: url, loading: true))
-        Task { [weak self] in
-            guard let self else { return }
-            ui = await fetch(url)
-        }
-    }
-
-    private func fetch(_ url: URL) async -> CatalogUI {
-        let fallback = saved.title
-        do {
-            return try await session.use(for: url) { catalog in
-                try catalog.fetch(url)
-                return CatalogUI.feed(try Self.read(catalog, url: url, fallback: fallback))
-            }
-        } catch let error as ChapbookError where error.isAuthRequired {
-            return (try? await session.use(for: url) { catalog in
-                CatalogUI.login(
-                    title: catalog.authTitle() ?? fallback,
-                    offersBasic: (try? catalog.authOffersBasic()) ?? false,
-                    retry: url)
-            }) ?? .failed(url)
-        } catch {
+    /// What the catalog holds, as the screen draws it.
+    nonisolated private static func snapshot(_ catalog: Catalog, url: URL, fallback: String) throws -> CatalogUI {
+        switch try catalog.browseState() {
+        case .feed:
+            let title = catalog.browseTitle()
+            return .feed(
+                Browsing(
+                    url: catalog.browseURL() ?? url,
+                    title: title.isEmpty ? fallback : title,
+                    entries: try catalog.entries(),
+                    facets: try catalog.facets(),
+                    hasSearch: try catalog.hasSearch(),
+                    nextPage: catalog.nextPageURL(),
+                    loading: false))
+        case .login(let title, let offersBasic, let retry):
+            return .login(title: title.isEmpty ? fallback : title, offersBasic: offersBasic, retry: retry ?? url)
+        case .failed(let failed, _):
+            return .failed(failed ?? url)
+        case .opening:
             return .failed(url)
         }
     }
 
-    nonisolated private static func read(_ catalog: Catalog, url: URL, fallback: String) throws -> Browsing {
-        Browsing(
-            url: url,
-            title: catalog.feedTitle() ?? fallback,
-            entries: try catalog.entries(),
-            facets: try catalog.facets(),
-            hasSearch: try catalog.hasSearch(),
-            nextPage: catalog.nextPageURL(),
-            loading: false)
+    /// Open a feed, pushing a crumb.
+    private func go(_ url: URL) {
+        depth += 1
+        ui = .feed(Browsing(url: url, loading: true))
+        let fallback = saved.title
+        Task { [weak self] in
+            guard let self else { return }
+            ui = (try? await session.use { catalog in
+                try? catalog.go(url)
+                return try Self.snapshot(catalog, url: url, fallback: fallback)
+            }) ?? .failed(url)
+        }
     }
 
     public func openEntry(_ entry: Catalog.Entry) {
         guard entry.kind == .navigation, let href = entry.href else { return }
-        open(href)
+        go(href)
     }
 
     /// Enqueue a publication's download. The entry carries its own
@@ -106,8 +104,19 @@ public final class CatalogViewModel: ObservableObject {
     }
 
     public func applyFacet(_ facet: Catalog.Facet) {
-        guard let href = facet.href else { return }
-        open(href)
+        guard case .feed(var feed) = ui, let index = feed.facets.firstIndex(of: facet) else { return }
+        depth += 1
+        feed.loading = true
+        ui = .feed(feed)
+        let url = facet.href ?? feed.url
+        let fallback = saved.title
+        Task { [weak self] in
+            guard let self else { return }
+            ui = (try? await session.use { catalog in
+                try? catalog.applyFacet(at: index)
+                return try Self.snapshot(catalog, url: url, fallback: fallback)
+            }) ?? .failed(url)
+        }
     }
 
     public func search(_ query: String) {
@@ -118,48 +127,65 @@ public final class CatalogViewModel: ObservableObject {
         let fallback = saved.title
         Task { [weak self] in
             guard let self else { return }
-            ui = (try? await session.use(for: url) { catalog in
-                try catalog.search(query)
-                return CatalogUI.feed(try Self.read(catalog, url: url, fallback: fallback))
+            ui = (try? await session.use { catalog in
+                try? catalog.search(query)
+                return try Self.snapshot(catalog, url: url, fallback: fallback)
             }) ?? .failed(url)
         }
     }
 
     public func loadMore() {
-        guard case .feed(var feed) = ui, let next = feed.nextPage, !feed.loadingMore else { return }
+        guard case .feed(var feed) = ui, feed.nextPage != nil, !feed.loadingMore else { return }
         feed.loadingMore = true
         ui = .feed(feed)
         Task { [weak self] in
             guard let self else { return }
-            let more: (entries: [Catalog.Entry], next: URL?)? = try? await session.use(for: next) { catalog in
-                try catalog.fetch(next)
+            let more: (entries: [Catalog.Entry], next: URL?)? = try? await session.use { catalog in
+                guard (try? catalog.loadMore()) == true else { return nil }
                 return (try catalog.entries(), catalog.nextPageURL())
             }
             guard case .feed(var current) = ui else { return }
             current.loadingMore = false
             if let more {
-                current.entries += more.entries
+                current.entries = more.entries
                 current.nextPage = more.next
             }
             ui = .feed(current)
         }
     }
 
-    /// Sign in with Basic, store it by origin, and fetch the refused feed
-    /// again.
+    /// Sign in with Basic: the engine stores it by origin and fetches the
+    /// refused feed again, moving no crumb.
     public func signIn(username: String, password: String, retry: URL) {
-        if let origin = Credentials.origin(of: retry) {
-            credentials.set(origin, authorization: Credentials.basic(username: username, password: password))
+        ui = .feed(Browsing(url: retry, loading: true))
+        let fallback = saved.title
+        Task { [weak self] in
+            guard let self else { return }
+            ui = (try? await session.use { catalog in
+                try? catalog.submitLogin(username: username, password: password)
+                return try Self.snapshot(catalog, url: retry, fallback: fallback)
+            }) ?? .failed(retry)
         }
-        open(retry, pushCrumb: false)
     }
 
     /// True when Back stayed inside the catalog; false when the screen
     /// should close.
     public func back() -> Bool {
-        guard crumbs.count > 1 else { return false }
-        crumbs.removeLast()
-        open(crumbs[crumbs.count - 1], pushCrumb: false)
+        guard depth > 1 else { return false }
+        depth -= 1
+        if case .feed(var feed) = ui {
+            feed.loading = true
+            ui = .feed(feed)
+        }
+        let fallback = saved.title
+        let root = URL(string: saved.url) ?? URL(fileURLWithPath: "/")
+        Task { [weak self] in
+            guard let self else { return }
+            ui = (try? await session.use { catalog in
+                _ = try catalog.back()
+                return try Self.snapshot(catalog, url: catalog.browseURL() ?? root, fallback: fallback)
+            }) ?? .failed(root)
+        }
         return true
     }
 }

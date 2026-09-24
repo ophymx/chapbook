@@ -20,6 +20,8 @@ import androidx.work.WorkInfo
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import androidx.work.workDataOf
+import com.ophymx.chapbook.App
+import com.ophymx.chapbook.DownloadOutcome
 import com.ophymx.chapbook.DownloadRequest
 import com.ophymx.chapbook.app.R
 import com.ophymx.chapbook.app.container
@@ -39,10 +41,12 @@ import java.util.concurrent.TimeUnit
  * request goes into WorkManager's input — everything but a credential,
  * which the worker reads from [Credentials] by origin when it runs, so
  * no secret sits in WorkManager's database and a token rotated meanwhile
- * is simply fresh. When the file lands the worker hands it to the shelf
- * and records the sync services the entry carried, which live in the
- * entry and nowhere else — the reason the request captured them before
- * the transfer rather than after.
+ * is simply fresh. When the file lands the worker hands it to the
+ * engine's landing, which shelves it and records the sync services the
+ * entry carried — they live in the entry and nowhere else, the reason
+ * the request captured them before the transfer rather than after. How a
+ * status is read is the engine's table too ([App.downloadOutcome]), so
+ * this worker and the iOS delegate cannot disagree about a 403.
  */
 class Downloads(context: Context) {
     private val manager = WorkManager.getInstance(context)
@@ -90,15 +94,17 @@ class DownloadWorker(context: Context, params: WorkerParameters) : CoroutineWork
         try {
             val fetched = withContext(Dispatchers.IO) { fetch(url, staged) { percent -> setProgressAsync(workDataOf(KEY_PERCENT to percent)) } }
             when (fetched) {
-                Fetched.Ok -> {}
-                Fetched.Refused -> return Result.failure(workDataOf(KEY_ERROR to "refused"))
-                Fetched.Gone -> return Result.failure(workDataOf(KEY_ERROR to "gone"))
-                Fetched.Again -> return Result.retry()
+                DownloadOutcome.LANDED -> {}
+                DownloadOutcome.REFUSED -> return Result.failure(workDataOf(KEY_ERROR to "refused"))
+                DownloadOutcome.GONE -> return Result.failure(workDataOf(KEY_ERROR to "gone"))
+                DownloadOutcome.AGAIN -> return Result.retry()
             }
-            // The import copies; the source is ours and goes in `finally`.
-            val book = container.shelf.importFile(staged.absolutePath)
-                ?: return Result.failure(workDataOf(KEY_ERROR to "not a book"))
-            container.shelf.setSyncTargets(book, inputData.getString(KEY_PROGRESSION), inputData.getString(KEY_CONTAINER))
+            // The landing copies; the source is ours and goes in `finally`.
+            val book = container.shelf.landDownload(
+                staged.absolutePath,
+                inputData.getString(KEY_PROGRESSION),
+                inputData.getString(KEY_CONTAINER),
+            ) ?: return Result.failure(workDataOf(KEY_ERROR to "not a book"))
             notifications.done(id.hashCode(), title)
             return Result.success(workDataOf(KEY_BOOK to book))
         } catch (e: IOException) {
@@ -108,18 +114,12 @@ class DownloadWorker(context: Context, params: WorkerParameters) : CoroutineWork
         }
     }
 
-    private enum class Fetched { Ok, Refused, Gone, Again }
-
-    private fun fetch(url: String, into: File, progress: (Int) -> Unit): Fetched {
+    private fun fetch(url: String, into: File, progress: (Int) -> Unit): DownloadOutcome {
         // `Authorization` is the client's to add, by origin, at this moment.
         val request = Request.Builder().url(url).header("Accept", "*/*").build()
         applicationContext.container.http.client.newCall(request).execute().use { response ->
-            when {
-                response.code == 401 || response.code == 403 -> return Fetched.Refused
-                response.code == 404 || response.code == 410 -> return Fetched.Gone
-                response.code >= 500 -> return Fetched.Again
-                !response.isSuccessful -> return Fetched.Gone
-            }
+            val outcome = App.downloadOutcome(response.code)
+            if (outcome != DownloadOutcome.LANDED) return outcome
             val total = response.body.contentLength()
             var seen = 0L
             var lastPercent = -1
@@ -142,7 +142,7 @@ class DownloadWorker(context: Context, params: WorkerParameters) : CoroutineWork
                 }
             }
         }
-        return Fetched.Ok
+        return DownloadOutcome.LANDED
     }
 
     companion object {

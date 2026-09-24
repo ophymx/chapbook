@@ -1,28 +1,27 @@
 package com.ophymx.chapbook.app.model
 
-import android.content.Context
 import android.net.Uri
-import androidx.core.content.edit
 
 /**
  * How an adopted book is found again.
  *
  * A book opened from a `content://` URI reaches the library by content:
  * it is recorded under its fingerprint, and the library keeps no copy.
- * Reopening the *file* next launch is the app's job, and this is the
- * map that makes it possible — fingerprint to the persisted URI grant.
- * Keyed by fingerprint rather than row id because the fingerprint
- * survives a reinstall; the id is the reader's history of the book.
+ * Reopening the *file* next launch is the app's job, and the engine
+ * keeps the map that makes it possible — fingerprint to the persisted
+ * URI grant, as opaque bytes beside the shelf. This is that map with the
+ * bytes read as the URI they are. Blocking, like the opener that uses
+ * it: never from the main thread.
  */
-class Grants(context: Context) {
-    private val prefs = context.getSharedPreferences("grants", Context.MODE_PRIVATE)
-
+class Grants(private val shelf: Shelf) {
     fun uriFor(fingerprint: String): Uri? =
-        prefs.getString(fingerprint, null)?.let(Uri::parse)
+        shelf.blockingApp { grant(fingerprint) }?.let { Uri.parse(String(it, Charsets.UTF_8)) }
 
-    fun remember(fingerprint: String, uri: Uri) =
-        prefs.edit { putString(fingerprint, uri.toString()) }
+    fun remember(fingerprint: String, uri: Uri) {
+        shelf.blockingApp { rememberGrant(fingerprint, uri.toString().toByteArray(Charsets.UTF_8)) }
+    }
 
-    fun forget(fingerprint: String) =
-        prefs.edit { remove(fingerprint) }
+    fun forget(fingerprint: String) {
+        shelf.blockingApp { forgetGrant(fingerprint) }
+    }
 }

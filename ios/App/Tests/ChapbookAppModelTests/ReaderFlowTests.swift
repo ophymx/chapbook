@@ -12,7 +12,7 @@ import Testing
 // the screen closes.
 
 @MainActor
-private func reader(_ name: String) async throws -> (ReaderViewModel, Reading, URL) {
+private func reader(_ name: String) async throws -> (ReaderViewModel, Reading, AppContainer, URL) {
     let (app, dir) = try container(name)
     guard case .book(let id) = await app.opener.add(try handed(dir, "book.epub")) else {
         throw TestFailure("not added")
@@ -27,11 +27,11 @@ private func reader(_ name: String) async throws -> (ReaderViewModel, Reading, U
     try reading.session.setMetrics(PageMetrics(width: 360, height: 640, dpiScale: 1))
     _ = try reading.session.renderImage()
     vm.moved(try reading.session.position())
-    return (vm, reading, dir)
+    return (vm, reading, app, dir)
 }
 
 @Test @MainActor func aBookOpensIntoTheModelWithItsContentsAndPlace() async throws {
-    let (vm, reading, dir) = try await reader("open")
+    let (vm, reading, _, dir) = try await reader("open")
     defer { try? FileManager.default.removeItem(at: dir) }
     #expect(reading.kind == .epub)
     #expect(!reading.contents.isEmpty)
@@ -44,7 +44,7 @@ private func reader(_ name: String) async throws -> (ReaderViewModel, Reading, U
 }
 
 @Test @MainActor func theWholeBookBarMovesWithTheReaderAndTheReadoutIsAPreference() async throws {
-    let (vm, reading, dir) = try await reader("progress")
+    let (vm, reading, app, dir) = try await reader("progress")
     defer { try? FileManager.default.removeItem(at: dir) }
     let s = reading.session
 
@@ -57,16 +57,17 @@ private func reader(_ name: String) async throws -> (ReaderViewModel, Reading, U
     #expect(abs(vm.place.bookFraction - 1 / Double(units)) < 0.001)
     #expect(vm.place.bookFraction <= 1)
 
-    // The readout's words are the shell's preference, kept in defaults.
+    // The readout's words are the shell's preference, kept by the engine
+    // beside the shelf: a fresh handle over the same library reads it back.
     #expect(vm.preferences.progressLabel == .percent)
     vm.preferences.setProgressLabel(.pagesLeft)
     #expect(vm.preferences.progressLabel == .pagesLeft)
-    let again = Preferences(defaults: UserDefaults(suiteName: "chapbook-app-test-progress-\(ProcessInfo.processInfo.processIdentifier)")!)
+    let again = Preferences(app: try app.platform.open())
     #expect(again.progressLabel == .pagesLeft)
 }
 
 @Test @MainActor func aSearchWalksTheBookUnitByUnitAndAHitCanBeShown() async throws {
-    let (vm, reading, dir) = try await reader("search")
+    let (vm, reading, _, dir) = try await reader("search")
     defer { try? FileManager.default.removeItem(at: dir) }
     let s = reading.session
 
@@ -96,7 +97,7 @@ private func reader(_ name: String) async throws -> (ReaderViewModel, Reading, U
 }
 
 @Test @MainActor func aWordUnderTheFingerBecomesAHighlightTheMarksListKeeps() async throws {
-    let (vm, reading, dir) = try await reader("marks")
+    let (vm, reading, _, dir) = try await reader("marks")
     defer { try? FileManager.default.removeItem(at: dir) }
     let s = reading.session
 
@@ -127,7 +128,7 @@ private func reader(_ name: String) async throws -> (ReaderViewModel, Reading, U
 }
 
 @Test @MainActor func aSettingScopedToThisBookIsForgottenOnReset() async throws {
-    let (vm, _, dir) = try await reader("settings")
+    let (vm, _, _, dir) = try await reader("settings")
     defer { try? FileManager.default.removeItem(at: dir) }
     let before = try #require(vm.settings)
     var bigger = before
@@ -142,9 +143,9 @@ private func reader(_ name: String) async throws -> (ReaderViewModel, Reading, U
 }
 
 @Test @MainActor func closingTheScreenSavesThePlaceForTheShelf() async throws {
-    let (vm, reading, dir) = try await reader("close")
+    let (vm, reading, app, dir) = try await reader("close")
     defer { try? FileManager.default.removeItem(at: dir) }
-    let shelf = Shelf(directory: dir)
+    let shelf = app.shelf
     #expect(try await shelf.book(reading.book.id)?.state == .unread)
     _ = try reading.session.nextPage()
     vm.close()

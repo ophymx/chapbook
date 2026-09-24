@@ -109,6 +109,7 @@
 
 mod abi;
 mod annotations;
+mod app;
 mod catalog;
 mod config;
 mod error;
@@ -126,6 +127,25 @@ pub use annotations::{
     cb_session_annotation_count, cb_session_annotation_text, cb_session_goto_annotation,
     cb_session_highlight_at, cb_session_remove_annotation, cb_session_set_highlight_color,
 };
+#[cfg(unix)]
+pub use app::cb_app_adopt_fd;
+pub use app::{
+    cb_app, cb_app_add_catalog, cb_app_adopt, cb_app_browse, cb_app_catalog_count,
+    cb_app_catalog_id, cb_app_catalog_text, cb_app_close, cb_app_forget_grant, cb_app_grant,
+    cb_app_import, cb_app_land_download, cb_app_open, cb_app_open_book, cb_app_progress_label,
+    cb_app_remember_grant, cb_app_remove_catalog, cb_app_rename_catalog, cb_app_session_config,
+    cb_app_set_progress_label, cb_app_sync_all, cb_app_sync_book, cb_app_sync_next,
+    cb_basic_authorization, cb_browse_field, cb_browse_state, cb_catalog_apply_facet,
+    cb_catalog_back, cb_catalog_browse_text, cb_catalog_go, cb_catalog_load_more,
+    cb_catalog_sign_in, cb_catalog_state, cb_config_set_credential_store, cb_credential_forget_fn,
+    cb_credential_get_fn, cb_credential_key, cb_credential_response, cb_credential_response_fail,
+    cb_credential_response_found, cb_credential_response_locked, cb_credential_store_fn,
+    cb_download_outcome, cb_download_outcome_of_status, cb_opened, cb_place, cb_progress_label,
+    cb_reader_after_memory_warning, cb_reader_cache_budget_for, cb_reader_highlight_selection,
+    cb_reader_note_on_selection, cb_reader_place, cb_reader_show_hit, cb_saved_catalog_field,
+    cb_search_walk, cb_search_walk_close, cb_search_walk_context, cb_search_walk_hit,
+    cb_search_walk_hit_count, cb_search_walk_open, cb_search_walk_step,
+};
 pub use catalog::{
     cb_catalog, cb_catalog_auth_offers_basic, cb_catalog_auth_title, cb_catalog_close,
     cb_catalog_download, cb_catalog_entry, cb_catalog_entry_author, cb_catalog_entry_count,
@@ -142,10 +162,10 @@ pub use config::{
 };
 pub use error::cb_status;
 pub use http::{
-    cb_config_set_http_transport, cb_http_finalize_fn, cb_http_get_fn, cb_http_header,
-    cb_http_request, cb_http_response, cb_http_response_add_header, cb_http_response_append_body,
-    cb_http_response_fail, cb_http_response_set_content_type, cb_http_response_set_status,
-    cb_http_send_fn,
+    cb_config_set_http_transport, cb_config_set_http_transport_full, cb_http_finalize_fn,
+    cb_http_get_fn, cb_http_header, cb_http_request, cb_http_response, cb_http_response_add_header,
+    cb_http_response_append_body, cb_http_response_fail, cb_http_response_set_content_type,
+    cb_http_response_set_status, cb_http_send_fn,
 };
 pub use input::{
     cb_action, cb_action_outcome, cb_char_default_action, cb_key, cb_key_default_action,
@@ -223,6 +243,11 @@ pub enum cb_capability {
     /// `cb_sync_open` declines and the library is read and written only
     /// locally.
     CB_CAP_SYNC = 128,
+    /// The application layer: `cb_app_*`, `cb_reader_*`, the search walk
+    /// and the browse verbs. Without it every one of them declines, and a
+    /// host writes its own application over the session and the shelf —
+    /// which is what every host did before it existed.
+    CB_CAP_APP = 256,
 }
 
 /// A bitmask of [`cb_capability`].
@@ -253,6 +278,9 @@ pub extern "C" fn cb_capabilities() -> u32 {
         }
         if cfg!(feature = "mathml") {
             bits |= cb_capability::CB_CAP_MATHML as u32;
+        }
+        if cfg!(feature = "app") {
+            bits |= cb_capability::CB_CAP_APP as u32;
         }
         bits
     })

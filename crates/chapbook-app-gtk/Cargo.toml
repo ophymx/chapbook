@@ -13,7 +13,7 @@ authors.workspace = true
 # not have. Off this target the crate is a stub `main` and no dependencies
 # at all.
 [target.'cfg(target_os = "linux")'.dependencies]
-chapbook-app = { workspace = true }
+chapbook-app = { workspace = true, features = ["default"] }
 # v4_16 for the AccessibleText interface (4.14) and its extents/offset
 # geometry (4.16) — the same floor the reference viewer set, and for the
 # same reason: the page in front of a screen reader.

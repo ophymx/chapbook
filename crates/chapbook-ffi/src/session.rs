@@ -39,6 +39,23 @@ pub struct cb_session {
     pub(crate) zones: TapZones,
 }
 
+impl cb_session {
+    /// Wrap an open session as a handle: the default tap bands in the
+    /// direction the book declares, nothing drained, nothing searched.
+    pub(crate) fn boxed(inner: Session) -> Box<cb_session> {
+        // The default bands, in the direction the book declares;
+        // everything else waits for `cb_session_set_tap_zones`.
+        let zones = TapZones::new(inner.reading_direction());
+        Box::new(cb_session {
+            inner,
+            zones,
+            events: std::collections::VecDeque::new(),
+            event_message: None,
+            hits: Vec::new(),
+        })
+    }
+}
+
 /// Which reader opens the bytes. `CB_FORMAT_GUESS` decides from the bytes
 /// themselves, and is the right answer even when a name is available — the
 /// EPUB `mimetype` entry and the `%PDF` header do not lie and an extension
@@ -192,16 +209,7 @@ fn open_with(source: Source, config: *mut cb_config) -> *mut cb_session {
     match Session::open_with(source, config.inner) {
         Ok(inner) => {
             clear_last_error();
-            // The default bands, in the direction the book declares;
-            // everything else waits for `cb_session_set_tap_zones`.
-            let zones = TapZones::new(inner.reading_direction());
-            Box::into_raw(Box::new(cb_session {
-                inner,
-                zones,
-                events: std::collections::VecDeque::new(),
-                event_message: None,
-                hits: Vec::new(),
-            }))
+            Box::into_raw(cb_session::boxed(inner))
         }
         Err(e) => {
             from_error(&e);

@@ -2971,23 +2971,26 @@ pub extern "system" fn Java_com_ophymx_chapbook_Native_clearBookSettings(
 // side established, so a catalog behind a corporate proxy or a user CA
 // works because the platform's client does.
 
-/// A catalog client with the feed it last fetched.
+/// A catalog: the client, the feed it holds, the crumbs, the login. The
+/// application layer's, so the browse verbs below and the accessors the
+/// spike had read the same feed.
 struct CatalogHandle {
-    client: chapbook_reader::chapbook_opds::OpdsClient,
-    base: String,
-    feed: Option<chapbook_reader::chapbook_opds::Feed>,
-    auth: Option<chapbook_reader::chapbook_opds::AuthDocument>,
+    inner: chapbook_app::Catalog,
 }
 
 /// # Safety
-/// `handle` must have come from `catalogOpen` and not yet been closed.
+/// `handle` must have come from `catalogOpen` or `appBrowse` and not yet
+/// been closed.
 unsafe fn catalog<'a>(handle: jlong) -> Option<&'a mut CatalogHandle> {
     (handle as *mut CatalogHandle).as_mut()
 }
 
 /// Open a catalog client over the app's own networking. `transport` is
 /// the same `SyncTransport` the sync side takes — only its `get` half is
-/// used here, since browsing and downloading are both reads.
+/// used here, since browsing and downloading are both reads. No store
+/// and no saved row: a host that opens a catalog this way manages the
+/// credential itself through `catalogSetAuthorization`; `appBrowse` is
+/// the door with a store behind it.
 #[no_mangle]
 pub extern "system" fn Java_com_ophymx_chapbook_Native_catalogOpen(
     env: JNIEnv,
@@ -3003,10 +3006,11 @@ pub extern "system" fn Java_com_ophymx_chapbook_Native_catalogOpen(
         return 0;
     };
     Box::into_raw(Box::new(CatalogHandle {
-        client: OpdsClient::new(KtTransport { vm, transport }),
-        base: String::new(),
-        feed: None,
-        auth: None,
+        inner: chapbook_app::Catalog::new(
+            OpdsClient::new(KtTransport { vm, transport }),
+            std::sync::Arc::new(chapbook_reader::chapbook_core::NoCredentials),
+            String::new(),
+        ),
     })) as jlong
 }
 
@@ -3018,7 +3022,7 @@ pub extern "system" fn Java_com_ophymx_chapbook_Native_catalogClose(
     handle: jlong,
 ) {
     if handle != 0 {
-        // SAFETY: a handle from `catalogOpen`, closed once.
+        // SAFETY: a handle from `catalogOpen` or `appBrowse`, closed once.
         drop(unsafe { Box::from_raw(handle as *mut CatalogHandle) });
     }
 }
@@ -3035,16 +3039,17 @@ pub extern "system" fn Java_com_ophymx_chapbook_Native_catalogSetAuthorization(
         return;
     };
     if value.is_null() {
-        catalog.client.clear_authorization();
+        catalog.inner.client().clear_authorization();
         return;
     }
     if let Some(value) = string_in(&mut env, &value) {
-        catalog.client.set_authorization(value);
+        catalog.inner.client().set_authorization(value);
     }
 }
 
 /// Sign in with a username and password — the Basic flow, encoded here
-/// so Kotlin never has to.
+/// so Kotlin never has to. Sets the client's credential and nothing
+/// else; `catalogSignIn` is the one that also stores it and retries.
 #[no_mangle]
 pub extern "system" fn Java_com_ophymx_chapbook_Native_catalogSetBasicAuth(
     mut env: JNIEnv,
@@ -3060,12 +3065,13 @@ pub extern "system" fn Java_com_ophymx_chapbook_Native_catalogSetBasicAuth(
     ) else {
         return;
     };
-    catalog.client.set_basic_auth(&username, &password);
+    catalog.inner.client().set_basic_auth(&username, &password);
 }
 
 /// Fetch a feed and hold it. Returns 0 on success, -1 for a network or
 /// parse failure, and -2 when the catalog wants credentials (read the
-/// authentication document with `catalogAuthTitle`). Blocking.
+/// authentication document with `catalogAuthTitle`). Blocking. Moves no
+/// crumb — see `catalogGo`.
 #[no_mangle]
 pub extern "system" fn Java_com_ophymx_chapbook_Native_catalogFetch(
     mut env: JNIEnv,
@@ -3076,14 +3082,9 @@ pub extern "system" fn Java_com_ophymx_chapbook_Native_catalogFetch(
     let (Some(catalog), Some(url)) = (unsafe { catalog(handle) }, string_in(&mut env, &url)) else {
         return -1;
     };
-    match catalog.client.fetch(&url) {
-        Ok(feed) => {
-            catalog.base = url;
-            catalog.feed = Some(feed);
-            catalog.auth = None;
-            0
-        }
-        Err(e) => catalog_failure(catalog, e),
+    match catalog.inner.fetch(&url) {
+        Ok(()) => 0,
+        Err(e) => catalog_failure(e),
     }
 }
 
@@ -3100,35 +3101,24 @@ pub extern "system" fn Java_com_ophymx_chapbook_Native_catalogSearch(
     else {
         return -1;
     };
-    let Some(feed) = &catalog.feed else {
+    if catalog.inner.feed().is_none() {
         return -1;
-    };
-    if feed.search().is_none() {
+    }
+    if !catalog.inner.has_search() {
         return -3;
     }
-    let base = catalog.base.clone();
-    match catalog.client.search(feed, &base, &query) {
-        Ok(results) => {
-            catalog.feed = Some(results);
-            catalog.auth = None;
-            0
-        }
-        Err(e) => catalog_failure(catalog, e),
+    match catalog.inner.search(&query) {
+        Ok(()) => 0,
+        Err(e) => catalog_failure(e),
     }
 }
 
-/// Keep an authentication document where Kotlin can read it, and say
-/// which kind of failure this was.
-fn catalog_failure(
-    catalog: &mut CatalogHandle,
-    error: chapbook_reader::chapbook_opds::OpdsError,
-) -> jint {
+/// Say which kind of failure this was. The authentication document, when
+/// there was one, is already held by the catalog.
+fn catalog_failure(error: chapbook_reader::chapbook_opds::OpdsError) -> jint {
     use chapbook_reader::chapbook_opds::OpdsError;
     match error {
-        OpdsError::AuthRequired(document) => {
-            catalog.auth = document.map(|boxed| *boxed);
-            -2
-        }
+        OpdsError::AuthRequired(_) => -2,
         other => {
             log::warn!("catalog: {other}");
             -1
@@ -3143,7 +3133,7 @@ pub extern "system" fn Java_com_ophymx_chapbook_Native_catalogFeedTitle(
     _class: JClass,
     handle: jlong,
 ) -> jstring {
-    match unsafe { catalog(handle) }.and_then(|c| c.feed.as_ref().map(|f| f.title.clone())) {
+    match unsafe { catalog(handle) }.and_then(|c| c.inner.feed().map(|f| f.title.clone())) {
         Some(title) => string_out(&env, &title),
         None => JObject::null().into_raw(),
     }
@@ -3161,7 +3151,7 @@ pub extern "system" fn Java_com_ophymx_chapbook_Native_catalogEntry(
 ) -> jlongArray {
     let values: Vec<jlong> = unsafe { catalog(handle) }
         .and_then(|catalog| {
-            let entry = catalog.feed.as_ref()?.entries.get(index as usize)?;
+            let entry = catalog.inner.entries().get(index as usize)?;
             let acquisition = entry.acquisitions().next();
             let (progression, container) = chapbook_sync::targets_of(entry);
             Some(vec![
@@ -3187,7 +3177,11 @@ pub extern "system" fn Java_com_ophymx_chapbook_Native_catalogEntryCount(
     handle: jlong,
 ) -> jint {
     unsafe { catalog(handle) }.map_or(-1, |c| {
-        c.feed.as_ref().map_or(-1, |f| f.entries.len() as jint)
+        if c.inner.feed().is_some() {
+            c.inner.entries().len() as jint
+        } else {
+            -1
+        }
     })
 }
 
@@ -3216,40 +3210,38 @@ pub extern "system" fn Java_com_ophymx_chapbook_Native_catalogEntryText(
 ) -> jstring {
     use chapbook_reader::chapbook_opds::resolve_url;
     let value = unsafe { catalog(handle) }.and_then(|catalog| {
-        let base = catalog.base.clone();
-        let entry = catalog.feed.as_ref()?.entries.get(index as usize)?;
+        let base = catalog.inner.base();
+        let entry = catalog.inner.entries().get(index as usize)?;
         match field {
             0 => Some(entry.title.clone()),
             1 => entry.summary.clone(),
             2 => entry.publisher.clone(),
             3 => entry.language.clone(),
             4 => entry.series.as_ref().map(|s| s.name.clone()),
-            5 => entry.thumbnail().map(|l| resolve_url(&base, &l.href)),
-            6 => entry.cover().map(|l| resolve_url(&base, &l.href)),
+            5 => entry.thumbnail().map(|l| resolve_url(base, &l.href)),
+            6 => entry.cover().map(|l| resolve_url(base, &l.href)),
             7 => entry
                 .acquisitions()
                 .next()
                 .or_else(|| entry.links.first())
-                .map(|l| resolve_url(&base, &l.href)),
+                .map(|l| resolve_url(base, &l.href)),
             8 => Some(entry.id.clone()),
-            9 => entry
-                .download_request()
-                .map(|request| resolve_url(&base, &request.url)),
-            10 => entry
-                .download_request()
-                .map(|request| request.suggested_filename),
-            11 => entry
-                .download_request()
-                .and_then(|request| request.media_type),
-            // Resolved even though the parser already did it against the
-            // request URL: a no-op on an absolute href, and what stops a
-            // root-relative service path reaching the library as a path.
-            12 => chapbook_sync::targets_of(entry)
-                .0
-                .map(|href| resolve_url(&base, &href)),
-            13 => chapbook_sync::targets_of(entry)
-                .1
-                .map(|href| resolve_url(&base, &href)),
+            9 => catalog.inner.download(index as usize).map(|d| d.url),
+            10 => catalog
+                .inner
+                .download(index as usize)
+                .map(|d| d.suggested_filename),
+            11 => catalog
+                .inner
+                .download(index as usize)
+                .and_then(|d| d.media_type),
+            // Resolved by the application layer even though the parser
+            // already did it against the request URL: a no-op on an
+            // absolute href, and what stops a root-relative service path
+            // reaching the library as a path. Independent of whether
+            // there is anything to download, like the flags.
+            12 => catalog.inner.sync_targets(index as usize).0,
+            13 => catalog.inner.sync_targets(index as usize).1,
             _ => None,
         }
     });
@@ -3270,9 +3262,8 @@ pub extern "system" fn Java_com_ophymx_chapbook_Native_catalogEntryAuthor(
 ) -> jstring {
     let name = unsafe { catalog(handle) }.and_then(|catalog| {
         catalog
-            .feed
-            .as_ref()?
-            .entries
+            .inner
+            .entries()
             .get(index as usize)?
             .authors
             .get(author as usize)
@@ -3293,16 +3284,12 @@ pub extern "system" fn Java_com_ophymx_chapbook_Native_catalogPageHref(
     handle: jlong,
     direction: jint,
 ) -> jstring {
-    use chapbook_reader::chapbook_opds::resolve_url;
     let href = unsafe { catalog(handle) }.and_then(|catalog| {
-        let base = catalog.base.clone();
-        let feed = catalog.feed.as_ref()?;
-        let link = if direction == 0 {
-            feed.next()
+        if direction == 0 {
+            catalog.inner.next_page()
         } else {
-            feed.previous()
-        }?;
-        Some(resolve_url(&base, &link.href))
+            catalog.inner.previous_page()
+        }
     });
     match href {
         Some(href) => string_out(&env, &href),
@@ -3321,18 +3308,15 @@ pub extern "system" fn Java_com_ophymx_chapbook_Native_catalogFacets(
     handle: jlong,
 ) -> jlongArray {
     let values: Vec<jlong> = unsafe { catalog(handle) }
-        .and_then(|catalog| {
-            let feed = catalog.feed.as_ref()?;
+        .map(|catalog| {
             let mut out = Vec::new();
-            for (group, (_, links)) in feed.facet_groups().into_iter().enumerate() {
-                for link in links {
-                    out.push(group as jlong);
-                    out.push(link.active_facet as jlong);
-                    out.push(link.count.unwrap_or(0) as jlong);
-                    out.push(link.count.is_some() as jlong);
-                }
+            for facet in catalog.inner.facets() {
+                out.push(facet.group_index as jlong);
+                out.push(facet.active as jlong);
+                out.push(facet.count.unwrap_or(0) as jlong);
+                out.push(facet.count.is_some() as jlong);
             }
-            Some(out)
+            out
         })
         .unwrap_or_default();
     long_array_out(&env, &values)
@@ -3349,19 +3333,16 @@ pub extern "system" fn Java_com_ophymx_chapbook_Native_catalogFacetText(
     index: jint,
     field: jint,
 ) -> jstring {
-    use chapbook_reader::chapbook_opds::resolve_url;
     let value = unsafe { catalog(handle) }.and_then(|catalog| {
-        let base = catalog.base.clone();
-        let feed = catalog.feed.as_ref()?;
-        let groups = feed.facet_groups();
-        let (group, link) = groups
-            .iter()
-            .flat_map(|(name, links)| links.iter().map(move |l| (name, *l)))
-            .nth(index as usize)?;
+        let facet = catalog.inner.facets().into_iter().nth(index as usize)?;
         match field {
-            0 => Some(link.title.clone().unwrap_or_else(|| link.href.clone())),
-            1 => Some(group.clone()),
-            2 => Some(resolve_url(&base, &link.href)),
+            0 => Some(if facet.label.is_empty() {
+                facet.href.clone()
+            } else {
+                facet.label
+            }),
+            1 => Some(facet.group),
+            2 => Some(facet.href),
             _ => None,
         }
     });
@@ -3378,8 +3359,7 @@ pub extern "system" fn Java_com_ophymx_chapbook_Native_catalogHasSearch(
     _class: JClass,
     handle: jlong,
 ) -> jboolean {
-    unsafe { catalog(handle) }
-        .is_some_and(|c| c.feed.as_ref().is_some_and(|f| f.search().is_some())) as jboolean
+    unsafe { catalog(handle) }.is_some_and(|c| c.inner.has_search()) as jboolean
 }
 
 /// Download an entry onto the shelf at `libraryDir`, recording the sync
@@ -3394,11 +3374,10 @@ pub extern "system" fn Java_com_ophymx_chapbook_Native_catalogHasSearch(
 /// being suspended, and no transport implementation changes that — the
 /// whole transfer happens inside this call, so the process has to stay
 /// alive for it. For that, take the job apart: read `catalogEntryText`
-/// fields 9 through 13, run the transfer under `WorkManager` or
-/// `DownloadManager`, then call `libraryImportFile` and
-/// `librarySetSyncTargets` when the file lands. This is exactly those
-/// pieces back to back, which is why the services have to be read before
-/// a transfer that will outlive the feed.
+/// fields 9 through 13, run the transfer under `WorkManager`, then call
+/// `appLandDownload` when the file lands. This is exactly those pieces
+/// back to back, which is why the services have to be read before a
+/// transfer that will outlive the feed.
 #[no_mangle]
 pub extern "system" fn Java_com_ophymx_chapbook_Native_catalogDownload(
     mut env: JNIEnv,
@@ -3407,50 +3386,23 @@ pub extern "system" fn Java_com_ophymx_chapbook_Native_catalogDownload(
     index: jint,
     library_dir: JString,
 ) -> jlong {
-    use chapbook_reader::chapbook_library::Library;
-    use chapbook_reader::chapbook_opds::resolve_url;
     let (Some(catalog), Some(dir)) = (
         unsafe { catalog(handle) },
         string_in(&mut env, &library_dir),
     ) else {
         return 0;
     };
-    let Some((url, entry)) = catalog.feed.as_ref().and_then(|feed| {
-        let entry = feed.entries.get(index as usize)?;
-        let link = entry.acquisitions().next()?;
-        Some((resolve_url(&catalog.base, &link.href), entry.clone()))
-    }) else {
+    if catalog.inner.download(index as usize).is_none() {
         log::warn!("catalog entry {index} has nothing to download");
         return 0;
-    };
-
-    // Staging only: the library keeps its own copy of what it imports.
-    let staging = std::env::temp_dir().join(format!("chapbook-acquire-{}", std::process::id()));
-    if let Err(e) = std::fs::create_dir_all(&staging) {
-        log::error!("cannot make {}: {e}", staging.display());
-        return 0;
     }
-    let file = staging.join(format!("entry-{index}"));
-    if let Err(e) = catalog.client.download(&url, &file) {
-        log::error!("download failed: {e}");
-        let _ = std::fs::remove_file(&file);
-        return 0;
-    }
-    let imported = (|| {
-        let publication = chapbook_reader::open_publication(&file)?;
-        let mut library = Library::open(std::path::Path::new(&dir))?;
-        let id = library.import(&file, publication.as_ref())?;
-        let (progression, container) = chapbook_sync::targets_of(&entry);
-        let progression = progression.map(|href| resolve_url(&catalog.base, &href));
-        let container = container.map(|href| resolve_url(&catalog.base, &href));
-        library.set_sync_targets(id, progression.as_deref(), container.as_deref())?;
-        Ok::<i64, chapbook_reader::chapbook_core::ChapbookError>(id.0)
-    })();
-    let _ = std::fs::remove_file(&file);
-    match imported {
-        Ok(id) => id,
+    match catalog
+        .inner
+        .download_to_library(index as usize, std::path::Path::new(&dir))
+    {
+        Ok(id) => id.0,
         Err(e) => {
-            log::error!("import failed: {e}");
+            log::error!("download failed: {e}");
             0
         }
     }
@@ -3463,7 +3415,7 @@ pub extern "system" fn Java_com_ophymx_chapbook_Native_catalogAuthTitle(
     _class: JClass,
     handle: jlong,
 ) -> jstring {
-    match unsafe { catalog(handle) }.and_then(|c| c.auth.as_ref().map(|a| a.title.clone())) {
+    match unsafe { catalog(handle) }.and_then(|c| c.inner.auth_title().map(str::to_string)) {
         Some(title) => string_out(&env, &title),
         None => JObject::null().into_raw(),
     }
@@ -3477,6 +3429,1231 @@ pub extern "system" fn Java_com_ophymx_chapbook_Native_catalogAuthOffersBasic(
     _class: JClass,
     handle: jlong,
 ) -> jboolean {
-    unsafe { catalog(handle) }
-        .is_some_and(|c| c.auth.as_ref().is_some_and(|a| a.basic_flow().is_some())) as jboolean
+    unsafe { catalog(handle) }.is_some_and(|c| c.inner.auth_offers_basic()) as jboolean
+}
+
+// ---- Browsing: the verbs the app layer added ----
+//
+// The state machine the app module used to keep in a ViewModel: a
+// navigation row pushes a crumb, Back walks the crumbs, a facet replaces
+// and a page appends, a 401 is a login, a sign-in stores the credential
+// by origin and fetches again. Codes are `catalogFetch`'s.
+
+/// Open a feed the reader chose, pushing a crumb `catalogBack` returns
+/// to. Blocking.
+#[no_mangle]
+pub extern "system" fn Java_com_ophymx_chapbook_Native_catalogGo(
+    mut env: JNIEnv,
+    _class: JClass,
+    handle: jlong,
+    url: JString,
+) -> jint {
+    let (Some(catalog), Some(url)) = (unsafe { catalog(handle) }, string_in(&mut env, &url)) else {
+        return -1;
+    };
+    match catalog.inner.go(&url) {
+        Ok(()) => 0,
+        Err(e) => catalog_failure(e),
+    }
+}
+
+/// Back inside the catalog: refetch the previous crumb. False at the
+/// root, which is the cue to leave the screen. Blocking when it stays.
+#[no_mangle]
+pub extern "system" fn Java_com_ophymx_chapbook_Native_catalogBack(
+    _env: JNIEnv,
+    _class: JClass,
+    handle: jlong,
+) -> jboolean {
+    unsafe { catalog(handle) }.is_some_and(|c| c.inner.back()) as jboolean
+}
+
+/// Fetch the next page and append its rows. 1 appended, 0 no next page,
+/// -1 the page did not arrive (the held feed is untouched). Blocking.
+#[no_mangle]
+pub extern "system" fn Java_com_ophymx_chapbook_Native_catalogLoadMore(
+    _env: JNIEnv,
+    _class: JClass,
+    handle: jlong,
+) -> jint {
+    let Some(catalog) = (unsafe { catalog(handle) }) else {
+        return -1;
+    };
+    match catalog.inner.load_more() {
+        Ok(true) => 1,
+        Ok(false) => 0,
+        Err(e) => catalog_failure(e),
+    }
+}
+
+/// Narrow by a facet, by its index in `catalogFacets`' order — a fetch
+/// that pushes a crumb. Codes are `catalogFetch`'s.
+#[no_mangle]
+pub extern "system" fn Java_com_ophymx_chapbook_Native_catalogApplyFacet(
+    _env: JNIEnv,
+    _class: JClass,
+    handle: jlong,
+    index: jint,
+) -> jint {
+    let Some(catalog) = (unsafe { catalog(handle) }) else {
+        return -1;
+    };
+    match catalog.inner.apply_facet(index as usize) {
+        Ok(()) => 0,
+        Err(e) => catalog_failure(e),
+    }
+}
+
+/// Sign in to the catalog that refused: try the refused request again
+/// with the credential and, once it is accepted, store it by the refused
+/// URL's origin — through the app's store, never by the URL. A refused
+/// password is not kept. No crumb moves. Codes are `catalogFetch`'s; -3
+/// when nothing asked for a login.
+#[no_mangle]
+pub extern "system" fn Java_com_ophymx_chapbook_Native_catalogSignIn(
+    mut env: JNIEnv,
+    _class: JClass,
+    handle: jlong,
+    username: JString,
+    password: JString,
+) -> jint {
+    let (Some(catalog), Some(username), Some(password)) = (
+        unsafe { catalog(handle) },
+        string_in(&mut env, &username),
+        string_in(&mut env, &password),
+    ) else {
+        return -1;
+    };
+    if !matches!(
+        catalog.inner.state(),
+        chapbook_app::BrowseState::Login { .. }
+    ) {
+        return -3;
+    }
+    match catalog.inner.sign_in(&username, &password) {
+        Ok(()) => 0,
+        Err(e) => catalog_failure(e),
+    }
+}
+
+/// What the screen shows: 0 opening, 1 a feed, 2 a login, 3 a failure.
+#[no_mangle]
+pub extern "system" fn Java_com_ophymx_chapbook_Native_catalogState(
+    _env: JNIEnv,
+    _class: JClass,
+    handle: jlong,
+) -> jint {
+    use chapbook_app::BrowseState;
+    unsafe { catalog(handle) }.map_or(-1, |c| match c.inner.state() {
+        BrowseState::Opening => 0,
+        BrowseState::Feed => 1,
+        BrowseState::Login { .. } => 2,
+        BrowseState::Failed { .. } => 3,
+    })
+}
+
+/// One of the browse strings, by field: 0 the title (the held feed's,
+/// or the saved catalog's until there is one), 1 the URL the held feed
+/// came from, 2 the login's title, 3 the refused URL a sign-in retries,
+/// 4 the failed URL, 5 why it failed (for a log). Null where the current
+/// state carries none. The numbering is the C ABI's `cb_browse_field`.
+#[no_mangle]
+pub extern "system" fn Java_com_ophymx_chapbook_Native_catalogBrowseText(
+    env: JNIEnv,
+    _class: JClass,
+    handle: jlong,
+    field: jint,
+) -> jstring {
+    use chapbook_app::BrowseState;
+    let value = unsafe { catalog(handle) }.and_then(|c| match (field, c.inner.state()) {
+        (0, _) => Some(c.inner.title()),
+        (1, _) => Some(c.inner.base().to_string()),
+        (2, BrowseState::Login { title, .. }) => Some(title.clone()),
+        (3, BrowseState::Login { retry, .. }) => Some(retry.clone()),
+        (4, BrowseState::Failed { url, .. }) => Some(url.clone()),
+        (5, BrowseState::Failed { reason, .. }) => Some(reason.clone()),
+        _ => None,
+    });
+    match value {
+        Some(value) => string_out(&env, &value),
+        None => JObject::null().into_raw(),
+    }
+}
+
+// ---- The application ----
+//
+// `chapbook-app` is what the app module wrote for itself in Kotlin,
+// written once: custody, the shelf's defaults, the reader's place and
+// memory rules, the search walk, saved catalogs, what a landed download
+// does, sync credentialed per book. This section is it crossing JNI. The
+// platform reaches it as three Kotlin objects — the transport, a
+// `CredentialStore` over the Keystore, and the `Runnable` wakers — and
+// answers come back as codes and numbers for the app to word.
+
+/// The Kotlin credential store, held as a global ref and asked from
+/// whichever thread the layer is on — the catalog's, the sync driver's.
+/// Nothing here prompts: a lookup is a lookup.
+struct KtCredentials {
+    vm: jni::JavaVM,
+    store: jni::objects::GlobalRef,
+}
+
+impl KtCredentials {
+    fn with_env<T>(
+        &self,
+        f: impl FnOnce(&mut JNIEnv) -> Result<T, jni::errors::Error>,
+    ) -> Result<T, String> {
+        let mut env = self
+            .vm
+            .attach_current_thread_permanently()
+            .map_err(|e| format!("cannot attach to the JVM: {e}"))?;
+        let result = f(&mut env);
+        if env.exception_check().unwrap_or(false) {
+            env.exception_clear().ok();
+            return Err("the credential store threw".to_string());
+        }
+        result.map_err(|e| format!("credential store call failed: {e}"))
+    }
+}
+
+impl chapbook_reader::chapbook_core::CredentialStore for KtCredentials {
+    fn get(
+        &self,
+        key: &chapbook_reader::chapbook_core::CredentialKey,
+        _freshness: chapbook_reader::chapbook_core::Freshness,
+    ) -> chapbook_reader::chapbook_core::CredentialLookup {
+        use chapbook_reader::chapbook_core::{Credential, CredentialLookup};
+        let found = self.with_env(|env| {
+            let key = env.new_string(key.as_str())?;
+            let value = env
+                .call_method(
+                    self.store.as_obj(),
+                    "get",
+                    "(Ljava/lang/String;)Ljava/lang/String;",
+                    &[(&key).into()],
+                )?
+                .l()?;
+            if value.is_null() {
+                Ok(None)
+            } else {
+                Ok(Some(String::from(
+                    env.get_string(&jni::objects::JString::from(value))?,
+                )))
+            }
+        });
+        match found {
+            Ok(Some(authorization)) => CredentialLookup::Found(Credential::new(authorization)),
+            Ok(None) => CredentialLookup::Missing,
+            Err(why) => CredentialLookup::Failed(why),
+        }
+    }
+
+    fn store(
+        &self,
+        key: &chapbook_reader::chapbook_core::CredentialKey,
+        credential: &chapbook_reader::chapbook_core::Credential,
+    ) -> Result<(), chapbook_reader::chapbook_core::ChapbookError> {
+        self.with_env(|env| {
+            let key = env.new_string(key.as_str())?;
+            let value = env.new_string(&credential.authorization)?;
+            env.call_method(
+                self.store.as_obj(),
+                "set",
+                "(Ljava/lang/String;Ljava/lang/String;)V",
+                &[(&key).into(), (&value).into()],
+            )?;
+            Ok(())
+        })
+        .map_err(chapbook_reader::chapbook_core::ChapbookError::Credential)
+    }
+
+    fn forget(
+        &self,
+        key: &chapbook_reader::chapbook_core::CredentialKey,
+    ) -> Result<(), chapbook_reader::chapbook_core::ChapbookError> {
+        self.with_env(|env| {
+            let key = env.new_string(key.as_str())?;
+            env.call_method(
+                self.store.as_obj(),
+                "forget",
+                "(Ljava/lang/String;)V",
+                &[(&key).into()],
+            )?;
+            Ok(())
+        })
+        .map_err(chapbook_reader::chapbook_core::ChapbookError::Credential)
+    }
+}
+
+/// What an app handle points at: the application, plus the sync drain
+/// state the flattened `appSyncNext`/`appSyncDetail` pair reads.
+struct AppHandle {
+    inner: chapbook_app::App,
+    pending: std::collections::VecDeque<chapbook_app::SyncStatus>,
+    detail: Option<String>,
+    marks_error: Option<String>,
+}
+
+/// # Safety
+/// `handle` must have come from `appOpen` and not yet been closed.
+unsafe fn app<'a>(handle: jlong) -> Option<&'a mut AppHandle> {
+    (handle as *mut AppHandle).as_mut()
+}
+
+/// A `Runnable` as the waker a driver takes: null means poll.
+fn kt_waker(env: &JNIEnv, waker: JObject) -> std::sync::Arc<dyn Fn() + Send + Sync> {
+    if waker.is_null() {
+        return std::sync::Arc::new(|| {});
+    }
+    let (Ok(vm), Ok(waker)) = (env.get_java_vm(), env.new_global_ref(waker)) else {
+        return std::sync::Arc::new(|| {});
+    };
+    std::sync::Arc::new(move || {
+        if let Ok(mut env) = vm.attach_current_thread_permanently() {
+            let _ = env.call_method(waker.as_obj(), "run", "()V", &[]);
+        }
+    })
+}
+
+/// Open the application over `libraryDir` — `context.getFilesDir()` —
+/// with the platform's fonts, the Kotlin `CredentialStore`, and the
+/// transport. `deviceName` is what a progression service shows beside
+/// this device's position. 0 if the library will not open; logcat says
+/// why. One thread's at a time, like the library it holds.
+#[no_mangle]
+pub extern "system" fn Java_com_ophymx_chapbook_Native_appOpen(
+    mut env: JNIEnv,
+    _class: JClass,
+    library_dir: JString,
+    credentials: JObject,
+    transport: JObject,
+    device_name: JString,
+) -> jlong {
+    let (Some(dir), Some(name)) = (
+        string_in(&mut env, &library_dir),
+        string_in(&mut env, &device_name),
+    ) else {
+        return 0;
+    };
+    if transport.is_null() || credentials.is_null() {
+        log::error!("appOpen needs a transport and a credential store");
+        return 0;
+    }
+    let (Ok(vm), Ok(transport), Ok(store)) = (
+        env.get_java_vm(),
+        env.new_global_ref(transport),
+        env.new_global_ref(credentials),
+    ) else {
+        return 0;
+    };
+    let Ok(vm2) = env.get_java_vm() else {
+        return 0;
+    };
+    let platform = chapbook_app::Platform::new(FontSource::android_system())
+        .with_credentials(std::sync::Arc::new(KtCredentials { vm, store }))
+        .with_transport(std::sync::Arc::new(KtTransport { vm: vm2, transport }))
+        .with_device_name(name);
+    match chapbook_app::App::open(std::path::Path::new(&dir), platform) {
+        Ok(inner) => Box::into_raw(Box::new(AppHandle {
+            inner,
+            pending: std::collections::VecDeque::new(),
+            detail: None,
+            marks_error: None,
+        })) as jlong,
+        Err(e) => {
+            log::error!("could not open the app at {dir}: {e}");
+            0
+        }
+    }
+}
+
+/// Close the application. Tolerates 0. Joins the sync driver if one was
+/// started, which blocks for the book in flight.
+#[no_mangle]
+pub extern "system" fn Java_com_ophymx_chapbook_Native_appClose(
+    _env: JNIEnv,
+    _class: JClass,
+    handle: jlong,
+) {
+    if handle != 0 {
+        // SAFETY: a handle from `appOpen`, closed once.
+        drop(unsafe { Box::from_raw(handle as *mut AppHandle) });
+    }
+}
+
+/// Import: copy a file into the library and answer with its row, or 0.
+/// Blocking.
+#[no_mangle]
+pub extern "system" fn Java_com_ophymx_chapbook_Native_appImport(
+    mut env: JNIEnv,
+    _class: JClass,
+    handle: jlong,
+    path: JString,
+) -> jlong {
+    let (Some(app), Some(path)) = (unsafe { app(handle) }, string_in(&mut env, &path)) else {
+        return 0;
+    };
+    match app.inner.import(std::path::Path::new(&path)) {
+        Ok(record) => record.id.0,
+        Err(e) => {
+            log::error!("import failed: {e}");
+            0
+        }
+    }
+}
+
+/// Adopt: record a book the platform owns, from a detached descriptor,
+/// and remember `grant` — the persisted `content://` URI's bytes — as the
+/// way to reach it again. The library keeps no copy. Opening is what
+/// records the book, so a session is opened, asked which row it became,
+/// and dropped saving nothing. Takes ownership of `fd`. 0 on failure.
+#[no_mangle]
+pub extern "system" fn Java_com_ophymx_chapbook_Native_appAdoptFd(
+    env: JNIEnv,
+    _class: JClass,
+    handle: jlong,
+    fd: jint,
+    grant: jni::objects::JByteArray,
+) -> jlong {
+    if fd < 0 {
+        log::error!("appAdoptFd got no descriptor");
+        return 0;
+    }
+    // SAFETY: Kotlin called `ParcelFileDescriptor.detachFd()`, which gives
+    // up ownership; nothing else will read or close it. Taken before any
+    // decline so ownership is unconditional.
+    let file = unsafe {
+        use std::os::fd::FromRawFd;
+        std::fs::File::from_raw_fd(fd)
+    };
+    let Some(app) = (unsafe { app(handle) }) else {
+        return 0;
+    };
+    let Ok(grant) = env.convert_byte_array(grant) else {
+        return 0;
+    };
+    match app.inner.adopt(Source::reader(file), &grant) {
+        Ok(id) => id.0,
+        Err(e) => {
+            log::error!("adopt failed: {e}");
+            0
+        }
+    }
+}
+
+/// `appAdoptFd` for a session the app already opened over a descriptor
+/// with `appOpenFd`: remember `grant` under the book it reached. 0 for a
+/// session that reached no shelf.
+#[no_mangle]
+pub extern "system" fn Java_com_ophymx_chapbook_Native_appAdopt(
+    env: JNIEnv,
+    _class: JClass,
+    handle: jlong,
+    session_handle: jlong,
+    grant: jni::objects::JByteArray,
+) -> jlong {
+    let (Some(app), Some(session)) = (unsafe { app(handle) }, unsafe { session(session_handle) })
+    else {
+        return 0;
+    };
+    let Ok(grant) = env.convert_byte_array(grant) else {
+        return 0;
+    };
+    match app.inner.adopt_open(session, &grant) {
+        Ok(id) => id.0,
+        Err(e) => {
+            log::error!("adopt failed: {e}");
+            0
+        }
+    }
+}
+
+/// The grant that reaches an adopted book, by the row's fingerprint, as
+/// the bytes the app handed over — or null when none was remembered.
+#[no_mangle]
+pub extern "system" fn Java_com_ophymx_chapbook_Native_appGrant(
+    mut env: JNIEnv,
+    _class: JClass,
+    handle: jlong,
+    fingerprint: JString,
+) -> jni::sys::jbyteArray {
+    let (Some(app), Some(fingerprint)) =
+        (unsafe { app(handle) }, string_in(&mut env, &fingerprint))
+    else {
+        return JObject::null().into_raw();
+    };
+    match app.inner.grant(&fingerprint) {
+        Ok(Some(grant)) => env
+            .byte_array_from_slice(&grant)
+            .map(|a| a.into_raw())
+            .unwrap_or_else(|_| JObject::null().into_raw()),
+        Ok(None) => JObject::null().into_raw(),
+        Err(e) => {
+            log::error!("grant lookup failed: {e}");
+            JObject::null().into_raw()
+        }
+    }
+}
+
+/// Remember how to reach a book, by fingerprint.
+#[no_mangle]
+pub extern "system" fn Java_com_ophymx_chapbook_Native_appRememberGrant(
+    mut env: JNIEnv,
+    _class: JClass,
+    handle: jlong,
+    fingerprint: JString,
+    grant: jni::objects::JByteArray,
+) -> jboolean {
+    let (Some(app), Some(fingerprint), Ok(grant)) = (
+        unsafe { app(handle) },
+        string_in(&mut env, &fingerprint),
+        env.convert_byte_array(grant),
+    ) else {
+        return 0;
+    };
+    library_outcome(
+        app.inner.remember_grant(&fingerprint, &grant),
+        "remember grant",
+    )
+}
+
+/// Forget how to reach a book. True when nothing was remembered too.
+#[no_mangle]
+pub extern "system" fn Java_com_ophymx_chapbook_Native_appForgetGrant(
+    mut env: JNIEnv,
+    _class: JClass,
+    handle: jlong,
+    fingerprint: JString,
+) -> jboolean {
+    let (Some(app), Some(fingerprint)) =
+        (unsafe { app(handle) }, string_in(&mut env, &fingerprint))
+    else {
+        return 0;
+    };
+    library_outcome(app.inner.forget_grant(&fingerprint), "forget grant")
+}
+
+/// Open a shelf row for reading, whichever door it came in through:
+/// `[how, session]`, where `how` is 0 a session (the library's copy,
+/// open — `session` is its handle), 1 adopted (the platform's file: read
+/// the grant with `appGrant`, resolve it, open with `appOpenFd`), 2
+/// missing (out of reach; the row survives). Empty on failure.
+#[no_mangle]
+pub extern "system" fn Java_com_ophymx_chapbook_Native_appOpenBook(
+    env: JNIEnv,
+    _class: JClass,
+    handle: jlong,
+    book: jlong,
+) -> jlongArray {
+    use chapbook_app::Opened;
+    use chapbook_reader::chapbook_library::BookId;
+    let Some(app) = (unsafe { app(handle) }) else {
+        return long_array_out(&env, &[]);
+    };
+    let values: Vec<jlong> = match app.inner.open_book(BookId(book)) {
+        Ok(Opened::Session(session)) => vec![0, into_handle(*session)],
+        Ok(Opened::Adopted { .. }) => vec![1, 0],
+        Ok(Opened::Missing) => vec![2, 0],
+        Err(e) => {
+            log::error!("could not open book #{book}: {e}");
+            Vec::new()
+        }
+    };
+    long_array_out(&env, &values)
+}
+
+/// Open a session over a detached descriptor with the app's own
+/// configuration — how an adopted book is read once its grant has been
+/// resolved. Takes ownership of `fd`. 0 on failure.
+#[no_mangle]
+pub extern "system" fn Java_com_ophymx_chapbook_Native_appOpenFd(
+    _env: JNIEnv,
+    _class: JClass,
+    handle: jlong,
+    fd: jint,
+) -> jlong {
+    if fd < 0 {
+        log::error!("appOpenFd got no descriptor");
+        return 0;
+    }
+    // SAFETY: as `openFd` — a detached descriptor, owned from here.
+    let file = unsafe {
+        use std::os::fd::FromRawFd;
+        std::fs::File::from_raw_fd(fd)
+    };
+    let Some(app) = (unsafe { app(handle) }) else {
+        return 0;
+    };
+    match Session::open_with(Source::reader(file), app.inner.session_config()) {
+        Ok(session) => into_handle(session),
+        Err(e) => {
+            log::error!("could not open the descriptor: {e}");
+            0
+        }
+    }
+}
+
+/// The reader's chosen progress readout: 0 percent, 1 pages left, 2
+/// chapter and page.
+#[no_mangle]
+pub extern "system" fn Java_com_ophymx_chapbook_Native_appProgressLabel(
+    _env: JNIEnv,
+    _class: JClass,
+    handle: jlong,
+) -> jint {
+    use chapbook_app::ProgressLabel;
+    unsafe { app(handle) }.map_or(0, |app| match app.inner.progress_label() {
+        ProgressLabel::Percent => 0,
+        ProgressLabel::PagesLeft => 1,
+        ProgressLabel::ChapterPage => 2,
+    })
+}
+
+/// Keep the reader's choice of readout, for every launch after this.
+#[no_mangle]
+pub extern "system" fn Java_com_ophymx_chapbook_Native_appSetProgressLabel(
+    _env: JNIEnv,
+    _class: JClass,
+    handle: jlong,
+    label: jint,
+) -> jboolean {
+    use chapbook_app::ProgressLabel;
+    let Some(app) = (unsafe { app(handle) }) else {
+        return 0;
+    };
+    let label = match label {
+        1 => ProgressLabel::PagesLeft,
+        2 => ProgressLabel::ChapterPage,
+        _ => ProgressLabel::Percent,
+    };
+    library_outcome(app.inner.set_progress_label(label), "set progress label")
+}
+
+/// The saved catalogs' ids, in the order they were added.
+#[no_mangle]
+pub extern "system" fn Java_com_ophymx_chapbook_Native_appCatalogIds(
+    env: JNIEnv,
+    _class: JClass,
+    handle: jlong,
+) -> jlongArray {
+    let ids: Vec<jlong> = unsafe { app(handle) }
+        .and_then(|app| app.inner.catalogs().ok())
+        .map(|catalogs| catalogs.into_iter().map(|c| c.id).collect())
+        .unwrap_or_default();
+    long_array_out(&env, &ids)
+}
+
+/// One of a saved catalog's strings, by id: 0 the title (may be empty),
+/// 1 the URL. Null for an id that has been removed.
+#[no_mangle]
+pub extern "system" fn Java_com_ophymx_chapbook_Native_appCatalogText(
+    env: JNIEnv,
+    _class: JClass,
+    handle: jlong,
+    id: jlong,
+    field: jint,
+) -> jstring {
+    let value = unsafe { app(handle) }
+        .and_then(|app| app.inner.catalog(id).ok().flatten())
+        .and_then(|saved| match field {
+            0 => Some(saved.title),
+            1 => Some(saved.url),
+            _ => None,
+        });
+    match value {
+        Some(value) => string_out(&env, &value),
+        None => JObject::null().into_raw(),
+    }
+}
+
+/// Add a catalog; the title may be empty until its feed says. The new
+/// row's id, or 0.
+#[no_mangle]
+pub extern "system" fn Java_com_ophymx_chapbook_Native_appAddCatalog(
+    mut env: JNIEnv,
+    _class: JClass,
+    handle: jlong,
+    url: JString,
+    title: JString,
+) -> jlong {
+    let (Some(app), Some(url), Some(title)) = (
+        unsafe { app(handle) },
+        string_in(&mut env, &url),
+        string_in(&mut env, &title),
+    ) else {
+        return 0;
+    };
+    if url.trim().is_empty() {
+        return 0;
+    }
+    match app.inner.add_catalog(&url, &title) {
+        Ok(saved) => saved.id,
+        Err(e) => {
+            log::error!("add catalog failed: {e}");
+            0
+        }
+    }
+}
+
+/// Give a saved catalog a title. False for an id that is gone.
+#[no_mangle]
+pub extern "system" fn Java_com_ophymx_chapbook_Native_appRenameCatalog(
+    mut env: JNIEnv,
+    _class: JClass,
+    handle: jlong,
+    id: jlong,
+    title: JString,
+) -> jboolean {
+    let (Some(app), Some(title)) = (unsafe { app(handle) }, string_in(&mut env, &title)) else {
+        return 0;
+    };
+    match app.inner.rename_catalog(id, &title) {
+        Ok(renamed) => renamed as jboolean,
+        Err(e) => {
+            log::error!("rename catalog failed: {e}");
+            0
+        }
+    }
+}
+
+/// Take a catalog off the list. Its books and its credential stay.
+#[no_mangle]
+pub extern "system" fn Java_com_ophymx_chapbook_Native_appRemoveCatalog(
+    _env: JNIEnv,
+    _class: JClass,
+    handle: jlong,
+    id: jlong,
+) -> jboolean {
+    let Some(app) = (unsafe { app(handle) }) else {
+        return 0;
+    };
+    match app.inner.remove_catalog(id) {
+        Ok(removed) => removed as jboolean,
+        Err(e) => {
+            log::error!("remove catalog failed: {e}");
+            0
+        }
+    }
+}
+
+/// Browse a saved catalog (or, with `id` 0, no row — a pasted URL): a
+/// catalog handle over the app's transport and credential store, for the
+/// `catalog*` calls and the browse verbs. Close it with `catalogClose`;
+/// it does not need the app to stay open, and belongs to whichever
+/// thread does the blocking fetches. 0 on failure.
+#[no_mangle]
+pub extern "system" fn Java_com_ophymx_chapbook_Native_appBrowse(
+    _env: JNIEnv,
+    _class: JClass,
+    handle: jlong,
+    id: jlong,
+) -> jlong {
+    let Some(app) = (unsafe { app(handle) }) else {
+        return 0;
+    };
+    let opened = if id == 0 {
+        app.inner.open_catalog()
+    } else {
+        match app.inner.catalog(id) {
+            Ok(Some(saved)) => app.inner.browse(&saved),
+            Ok(None) => {
+                log::warn!("no saved catalog #{id}");
+                return 0;
+            }
+            Err(e) => {
+                log::error!("catalog lookup failed: {e}");
+                return 0;
+            }
+        }
+    };
+    match opened {
+        Ok(inner) => Box::into_raw(Box::new(CatalogHandle { inner })) as jlong,
+        Err(e) => {
+            log::error!("browse failed: {e}");
+            0
+        }
+    }
+}
+
+/// Everything a landed download does: import the file the platform's
+/// transfer produced and record the sync services the entry advertised
+/// (fields 12 and 13 of `catalogEntryText`, read before the transfer,
+/// either or both null). The file is the caller's and is left where it
+/// was; the same bytes twice are one row. The library row, or 0.
+#[no_mangle]
+pub extern "system" fn Java_com_ophymx_chapbook_Native_appLandDownload(
+    mut env: JNIEnv,
+    _class: JClass,
+    handle: jlong,
+    file: JString,
+    progression_url: JString,
+    annotation_container: JString,
+) -> jlong {
+    let (Some(app), Some(file)) = (unsafe { app(handle) }, string_in(&mut env, &file)) else {
+        return 0;
+    };
+    let progression = if progression_url.is_null() {
+        None
+    } else {
+        string_in(&mut env, &progression_url)
+    };
+    let container = if annotation_container.is_null() {
+        None
+    } else {
+        string_in(&mut env, &annotation_container)
+    };
+    match app.inner.land_download(
+        std::path::Path::new(&file),
+        progression.as_deref(),
+        container.as_deref(),
+    ) {
+        Ok(id) => id.0,
+        Err(e) => {
+            log::error!("landing failed: {e}");
+            0
+        }
+    }
+}
+
+/// Ask for every book with a service to reconcile, starting the app's
+/// driver on first use over the app's transport, credentialed per book
+/// from the app's store. 1 started, 0 nothing on the shelf syncs, -1
+/// failed. `waker` is a `Runnable` fired on the driver's thread once per
+/// report, or null to poll; the first one given is the one kept.
+#[no_mangle]
+pub extern "system" fn Java_com_ophymx_chapbook_Native_appSyncAll(
+    env: JNIEnv,
+    _class: JClass,
+    handle: jlong,
+    waker: JObject,
+) -> jint {
+    let Some(app) = (unsafe { app(handle) }) else {
+        return -1;
+    };
+    match app.inner.sync_all(kt_waker(&env, waker)) {
+        Ok(true) => 1,
+        Ok(false) => 0,
+        Err(e) => {
+            log::error!("sync failed to start: {e}");
+            -1
+        }
+    }
+}
+
+/// Ask for one book to reconcile.
+#[no_mangle]
+pub extern "system" fn Java_com_ophymx_chapbook_Native_appSyncBook(
+    env: JNIEnv,
+    _class: JClass,
+    handle: jlong,
+    book: jlong,
+    waker: JObject,
+) -> jboolean {
+    use chapbook_reader::chapbook_library::BookId;
+    let Some(app) = (unsafe { app(handle) }) else {
+        return 0;
+    };
+    match app.inner.sync_book(BookId(book), kt_waker(&env, waker)) {
+        Ok(()) => 1,
+        Err(e) => {
+            log::error!("sync failed to start: {e}");
+            0
+        }
+    }
+}
+
+/// The next sync report, in `syncNext`'s shape — `[kind, book,
+/// position, created, updated, deleted, adopted, refreshed, merged,
+/// conflicts, books, withdrawn, truncated]` — with one kind more: 3, a
+/// batch that could not start, whose `appSyncDetail` says why. Empty
+/// when nothing is waiting.
+#[no_mangle]
+pub extern "system" fn Java_com_ophymx_chapbook_Native_appSyncNext(
+    env: JNIEnv,
+    _class: JClass,
+    handle: jlong,
+) -> jlongArray {
+    use chapbook_app::SyncStatus;
+    use chapbook_sync::PositionReport;
+    let Some(app) = (unsafe { app(handle) }) else {
+        return long_array_out(&env, &[]);
+    };
+    if app.pending.is_empty() {
+        app.pending.extend(app.inner.sync_events());
+    }
+    let Some(status) = app.pending.pop_front() else {
+        return long_array_out(&env, &[]);
+    };
+    app.detail = None;
+    app.marks_error = None;
+    let mut values = [0 as jlong; 13];
+    match status {
+        SyncStatus::Book(report) => {
+            values[0] = 0;
+            values[1] = report.book.0;
+            values[2] = match report.position {
+                PositionReport::Idle => 0,
+                PositionReport::Pushed => 1,
+                PositionReport::Pulled => 2,
+                PositionReport::Refused(why) => {
+                    app.detail = Some(why);
+                    3
+                }
+                PositionReport::Conflict => 4,
+                PositionReport::Failed(why) => {
+                    app.detail = Some(why);
+                    5
+                }
+            };
+            let marks = report.annotations;
+            values[3] = marks.created as jlong;
+            values[4] = marks.updated as jlong;
+            values[5] = marks.deleted as jlong;
+            values[6] = marks.adopted as jlong;
+            values[7] = marks.refreshed as jlong;
+            values[8] = marks.merged as jlong;
+            values[9] = marks.conflicts as jlong;
+            values[11] = marks.withdrawn as jlong;
+            values[12] = marks.truncated as jlong;
+            app.marks_error = marks.failed;
+        }
+        SyncStatus::Failed { book, reason } => {
+            values[0] = 1;
+            values[1] = book.0;
+            app.detail = Some(reason);
+        }
+        SyncStatus::Finished { books } => {
+            values[0] = 2;
+            values[10] = books as jlong;
+        }
+        SyncStatus::Broken(reason) => {
+            values[0] = 3;
+            app.detail = Some(reason);
+        }
+    }
+    long_array_out(&env, &values)
+}
+
+/// The refusal, failure or breakage the last `appSyncNext` reported, or
+/// null.
+#[no_mangle]
+pub extern "system" fn Java_com_ophymx_chapbook_Native_appSyncDetail(
+    env: JNIEnv,
+    _class: JClass,
+    handle: jlong,
+) -> jstring {
+    match unsafe { app(handle) }.and_then(|a| a.detail.clone()) {
+        Some(detail) => string_out(&env, &detail),
+        None => JObject::null().into_raw(),
+    }
+}
+
+/// Why the last report's mark half stopped, or null.
+#[no_mangle]
+pub extern "system" fn Java_com_ophymx_chapbook_Native_appSyncMarksError(
+    env: JNIEnv,
+    _class: JClass,
+    handle: jlong,
+) -> jstring {
+    match unsafe { app(handle) }.and_then(|a| a.marks_error.clone()) {
+        Some(why) => string_out(&env, &why),
+        None => JObject::null().into_raw(),
+    }
+}
+
+/// A library write's outcome as a `jboolean`, with the reason logged.
+fn library_outcome(result: chapbook_reader::chapbook_core::Result<()>, what: &str) -> jboolean {
+    match result {
+        Ok(()) => 1,
+        Err(e) => {
+            log::error!("{what} failed: {e}");
+            0
+        }
+    }
+}
+
+// ---- The reader's policy ----
+
+fn double_array_out(env: &JNIEnv, values: &[f64]) -> jni::sys::jdoubleArray {
+    let Ok(array) = env.new_double_array(values.len() as i32) else {
+        return JObject::null().into_raw();
+    };
+    if env.set_double_array_region(&array, 0, values).is_err() {
+        return JObject::null().into_raw();
+    }
+    array.into_raw()
+}
+
+/// Where the reader is, as one value read after a draw: `[spine,
+/// spineLen, page, pageCount, bookFraction, pagesLeft, canGoBack]`,
+/// booleans as 0/1. Lays the current unit out if nothing has yet. Empty
+/// for a dead handle.
+#[no_mangle]
+pub extern "system" fn Java_com_ophymx_chapbook_Native_readerPlace(
+    env: JNIEnv,
+    _class: JClass,
+    handle: jlong,
+) -> jni::sys::jdoubleArray {
+    let values: Vec<f64> = unsafe { session(handle) }
+        .map(|s| {
+            let place = chapbook_app::reader::Place::of(s);
+            vec![
+                place.spine as f64,
+                place.spine_len as f64,
+                place.page as f64,
+                place.page_count as f64,
+                place.book_fraction,
+                place.pages_left() as f64,
+                place.can_go_back as u8 as f64,
+            ]
+        })
+        .unwrap_or_default();
+    double_array_out(&env, &values)
+}
+
+/// How much of what the platform says this process may use goes to a
+/// session's page cache: a quarter, between a floor and a cap. Hand the
+/// answer to `setCacheBudget`.
+#[no_mangle]
+pub extern "system" fn Java_com_ophymx_chapbook_Native_readerCacheBudgetFor(
+    _env: JNIEnv,
+    _class: JClass,
+    available_bytes: jlong,
+) -> jlong {
+    chapbook_app::reader::cache_budget_for(available_bytes.max(0) as u64) as jlong
+}
+
+/// What a memory warning does to a session: halve its budget, which
+/// evicts at once, and release its caches. The budget now in force.
+#[no_mangle]
+pub extern "system" fn Java_com_ophymx_chapbook_Native_readerAfterMemoryWarning(
+    _env: JNIEnv,
+    _class: JClass,
+    handle: jlong,
+) -> jlong {
+    unsafe { session(handle) }
+        .map(|s| chapbook_app::reader::after_memory_warning(s) as jlong)
+        .unwrap_or(0)
+}
+
+/// Jump to a hit and leave it selected — what a results row does when
+/// tapped. Whether the position moved.
+#[no_mangle]
+pub extern "system" fn Java_com_ophymx_chapbook_Native_readerShowHit(
+    _env: JNIEnv,
+    _class: JClass,
+    handle: jlong,
+    spine: jint,
+    start: jint,
+    end: jint,
+) -> jboolean {
+    let Some(s) = (unsafe { session(handle) }) else {
+        return 0;
+    };
+    let hit = chapbook_reader::SearchHit {
+        locator: chapbook_reader::chapbook_core::Locator {
+            spine_index: spine.max(0) as usize,
+            char_offset: start.max(0) as u32,
+        },
+        end: end.max(0) as u32,
+        context: String::new(),
+        match_range: (0, 0),
+    };
+    chapbook_app::reader::show_hit(s, &hit) as jboolean
+}
+
+/// The selection becomes a highlight, and the selection goes. The mark's
+/// id, or 0 with nothing selected.
+#[no_mangle]
+pub extern "system" fn Java_com_ophymx_chapbook_Native_readerHighlightSelection(
+    _env: JNIEnv,
+    _class: JClass,
+    handle: jlong,
+) -> jlong {
+    unsafe { session(handle) }
+        .and_then(chapbook_app::reader::highlight_selection)
+        .unwrap_or(0)
+}
+
+/// The selection becomes a note, and the selection goes. The mark's id,
+/// or 0 with nothing selected.
+#[no_mangle]
+pub extern "system" fn Java_com_ophymx_chapbook_Native_readerNoteOnSelection(
+    mut env: JNIEnv,
+    _class: JClass,
+    handle: jlong,
+    body: JString,
+) -> jlong {
+    let (Some(s), Some(body)) = (unsafe { session(handle) }, string_in(&mut env, &body)) else {
+        return 0;
+    };
+    chapbook_app::reader::note_on_selection(s, &body).unwrap_or(0)
+}
+
+// ---- The search walk ----
+//
+// A search one unit at a time on the session's thread, so the page
+// stays responsive between steps: the app calls `searchWalkStep` from a
+// coroutine on the main dispatcher, yielding between units, and reads
+// the hits so far after each. It stops itself at a cap.
+
+/// # Safety
+/// `handle` must have come from `searchWalkOpen` and not yet been closed.
+unsafe fn walk<'a>(handle: jlong) -> Option<&'a mut chapbook_app::reader::SearchWalk> {
+    (handle as *mut chapbook_app::reader::SearchWalk).as_mut()
+}
+
+/// Begin a search. 0 for a query that is only whitespace, which clears
+/// rather than searches.
+#[no_mangle]
+pub extern "system" fn Java_com_ophymx_chapbook_Native_searchWalkOpen(
+    mut env: JNIEnv,
+    _class: JClass,
+    query: JString,
+) -> jlong {
+    let Some(query) = string_in(&mut env, &query) else {
+        return 0;
+    };
+    match chapbook_app::reader::SearchWalk::new(&query) {
+        Some(walk) => Box::into_raw(Box::new(walk)) as jlong,
+        None => 0,
+    }
+}
+
+/// Search the next unit. Whether there is another to search: false once
+/// the last unit is searched or the cap is reached.
+#[no_mangle]
+pub extern "system" fn Java_com_ophymx_chapbook_Native_searchWalkStep(
+    _env: JNIEnv,
+    _class: JClass,
+    handle: jlong,
+    session_handle: jlong,
+) -> jboolean {
+    let (Some(walk), Some(s)) = (unsafe { walk(handle) }, unsafe { session(session_handle) })
+    else {
+        return 0;
+    };
+    walk.step(s) as jboolean
+}
+
+/// How many hits so far.
+#[no_mangle]
+pub extern "system" fn Java_com_ophymx_chapbook_Native_searchWalkHitCount(
+    _env: JNIEnv,
+    _class: JClass,
+    handle: jlong,
+) -> jint {
+    unsafe { walk(handle) }.map_or(-1, |w| w.hits().len() as jint)
+}
+
+/// One hit, in `searchHit`'s shape: `[spine, start, end, matchStart,
+/// matchEnd]`. Empty past the end.
+#[no_mangle]
+pub extern "system" fn Java_com_ophymx_chapbook_Native_searchWalkHit(
+    env: JNIEnv,
+    _class: JClass,
+    handle: jlong,
+    index: jint,
+) -> jlongArray {
+    let values: Vec<jlong> = unsafe { walk(handle) }
+        .and_then(|w| {
+            w.hits().get(index as usize).map(|hit| {
+                vec![
+                    hit.locator.spine_index as jlong,
+                    hit.locator.char_offset as jlong,
+                    hit.end as jlong,
+                    hit.match_range.0 as jlong,
+                    hit.match_range.1 as jlong,
+                ]
+            })
+        })
+        .unwrap_or_default();
+    long_array_out(&env, &values)
+}
+
+/// A hit's context, for a results row. Null past the end.
+#[no_mangle]
+pub extern "system" fn Java_com_ophymx_chapbook_Native_searchWalkContext(
+    env: JNIEnv,
+    _class: JClass,
+    handle: jlong,
+    index: jint,
+) -> jstring {
+    match unsafe { walk(handle) }
+        .and_then(|w| w.hits().get(index as usize).map(|h| h.context.clone()))
+    {
+        Some(context) => string_out(&env, &context),
+        None => JObject::null().into_raw(),
+    }
+}
+
+/// Close a walk. Tolerates 0.
+#[no_mangle]
+pub extern "system" fn Java_com_ophymx_chapbook_Native_searchWalkClose(
+    _env: JNIEnv,
+    _class: JClass,
+    handle: jlong,
+) {
+    if handle != 0 {
+        // SAFETY: a handle from `searchWalkOpen`, closed once.
+        drop(unsafe { Box::from_raw(handle as *mut chapbook_app::reader::SearchWalk) });
+    }
+}
+
+/// How a platform transfer's HTTP status is read: 0 landed, 1 refused
+/// (401 or 403 — worth a sign-in, not a retry), 2 gone (any other
+/// client-side answer), 3 again (a 5xx, or no response at all).
+#[no_mangle]
+pub extern "system" fn Java_com_ophymx_chapbook_Native_downloadOutcome(
+    _env: JNIEnv,
+    _class: JClass,
+    status: jint,
+) -> jint {
+    use chapbook_app::DownloadOutcome;
+    match DownloadOutcome::of_status(status.clamp(0, u16::MAX as i32) as u16) {
+        DownloadOutcome::Landed => 0,
+        DownloadOutcome::Refused => 1,
+        DownloadOutcome::Gone => 2,
+        DownloadOutcome::Again => 3,
+    }
+}
+
+// ---- Credential helpers ----
+
+/// The key a credential for `url` lives under — what the app's own code
+/// (a cover loader, a download job) asks its store for, so it agrees
+/// with what the layer stored. Null for anything that is not a URL with
+/// an origin.
+#[no_mangle]
+pub extern "system" fn Java_com_ophymx_chapbook_Native_credentialKey(
+    mut env: JNIEnv,
+    _class: JClass,
+    url: JString,
+) -> jstring {
+    use chapbook_reader::chapbook_core::CredentialKey;
+    match string_in(&mut env, &url).and_then(|url| CredentialKey::http_origin(&url)) {
+        Some(key) => string_out(&env, key.as_str()),
+        None => JObject::null().into_raw(),
+    }
+}
+
+/// The `Authorization` value for HTTP Basic, from a username and
+/// password — the engine's chore, so Kotlin never guesses the encoding.
+#[no_mangle]
+pub extern "system" fn Java_com_ophymx_chapbook_Native_basicAuthorization(
+    mut env: JNIEnv,
+    _class: JClass,
+    username: JString,
+    password: JString,
+) -> jstring {
+    let (Some(username), Some(password)) = (
+        string_in(&mut env, &username),
+        string_in(&mut env, &password),
+    ) else {
+        return JObject::null().into_raw();
+    };
+    string_out(
+        &env,
+        &chapbook_reader::chapbook_core::basic_authorization(&username, &password),
+    )
 }

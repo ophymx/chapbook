@@ -19,14 +19,22 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 # Forwarded verbatim to `chapbook-reader`, and reported at runtime by
 # `cb_capabilities()`. The forwarding is the point: a host that links this
 # ABI can ask what it got, instead of discovering by absence.
-default = ["library", "cbz", "pdf", "opds", "ureq", "svg", "mathml", "sync"]
+default = ["library", "cbz", "pdf", "opds", "ureq", "svg", "mathml", "sync", "app"]
 library = ["chapbook-reader/library"]
-cbz = ["chapbook-reader/cbz"]
-pdf = ["chapbook-reader/pdf"]
-opds = ["chapbook-reader/opds"]
-ureq = ["chapbook-reader/ureq", "chapbook-sync?/ureq"]
-svg = ["chapbook-reader/svg"]
-mathml = ["chapbook-reader/mathml"]
+cbz = ["chapbook-reader/cbz", "chapbook-app?/cbz"]
+pdf = ["chapbook-reader/pdf", "chapbook-app?/pdf"]
+# Catalogs cross as the application layer's `Catalog` — the held feed,
+# the crumbs, the login — so OPDS here means the app crate's catalog half
+# too. It requires `library` as the reader's own `opds` does: a page
+# stream caches under the library, and a downloaded book lands on it.
+opds = ["chapbook-reader/opds", "app", "chapbook-app/catalog"]
+ureq = ["chapbook-reader/ureq", "chapbook-sync?/ureq", "chapbook-app?/bundled-http"]
+svg = ["chapbook-reader/svg", "chapbook-app?/svg"]
+mathml = ["chapbook-reader/mathml", "chapbook-app?/mathml"]
+# The application policy layer — custody, the reader's place and memory
+# rules, the search walk, preferences — behind `cb_app_*`. Requires
+# `library`, because everything it keeps, it keeps there.
+app = ["dep:chapbook-app", "library"]
 # Position and annotation sync, driven from C. Requires `library` (the
 # schema the reconcile reads) and `opds` (the transport seam and the wire
 # types both halves speak).
@@ -35,6 +43,7 @@ sync = ["dep:chapbook-sync", "library", "opds"]
 [dependencies]
 chapbook-reader = { workspace = true }
 chapbook-sync = { workspace = true, optional = true }
+chapbook-app = { workspace = true, optional = true, default-features = false }
 log = { workspace = true }
 
 [dev-dependencies]

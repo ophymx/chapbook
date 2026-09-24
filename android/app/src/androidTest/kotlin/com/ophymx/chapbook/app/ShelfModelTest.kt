@@ -1,13 +1,16 @@
 package com.ophymx.chapbook.app
 
 import android.net.Uri
+import android.os.ParcelFileDescriptor
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.ophymx.chapbook.BookQuery
 import com.ophymx.chapbook.ReadingState
 import com.ophymx.chapbook.Session
 import com.ophymx.chapbook.app.model.Added
+import com.ophymx.chapbook.app.model.Credentials
 import com.ophymx.chapbook.app.model.Grants
+import com.ophymx.chapbook.app.model.Http
 import com.ophymx.chapbook.app.model.Opener
 import com.ophymx.chapbook.app.model.Shelf
 import kotlinx.coroutines.runBlocking
@@ -41,9 +44,9 @@ class ShelfModelTest {
     private fun <T> withModel(name: String, body: (dir: File, shelf: Shelf, opener: Opener, grants: Grants) -> T): T {
         val dir = scratch(name)
         try {
-            val shelf = Shelf(dir)
-            val grants = Grants(context)
-            return body(dir, shelf, Opener(context, dir, shelf, grants), grants)
+            val credentials = Credentials(context)
+            val shelf = Shelf(dir, credentials, Http(credentials).transport)
+            return body(dir, shelf, Opener(context, shelf), Grants(shelf))
         } finally {
             dir.deleteRecursively()
         }
@@ -100,19 +103,36 @@ class ShelfModelTest {
     }
 
     @Test
-    fun aBookWhoseFileIsGoneDoesNotOpen() = withModel("gone") { dir, shelf, opener, grants ->
-        // Adopted, then the grant is lost: the shelf row survives and the
-        // reader is told the file is out of reach rather than crashed.
-        val copy = File(dir, "adopted.epub").apply { writeBytes(fixture("epub/minimal.epub")) }
-        val id = (runBlocking { opener.add(Uri.fromFile(copy)) } as Added.Book).id
+    fun anAdoptedBookKeepsNoCopyAndIsFoundAgainByItsGrant() = withModel("adopt") { dir, shelf, opener, grants ->
+        // Adoption is the picker's door: a persistable grant, a record by
+        // content, no copy. A `file:` URI grants nothing persistable, so
+        // the opener's own door would import; adopt through the engine
+        // directly, with the URI as the grant, the way the opener does
+        // for a `content://` one.
+        val file = File(dir, "picked.epub").apply { writeBytes(fixture("epub/minimal.epub")) }
+        val uri = Uri.fromFile(file)
+        val pfd = ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
+        val id = checkNotNull(shelf.blockingApp { adoptFd(pfd, uri.toString().toByteArray()) }) { "not adopted" }
         val book = runBlocking { shelf.book(id) }!!
-        // Simulate the adopted shape: no copy, only a grant — and a grant
-        // that no longer resolves.
-        val adopted = book.copy(filePath = null)
-        grants.forget(adopted.fingerprint)
-        assertNull(opener.open(adopted))
-        grants.remember(adopted.fingerprint, Uri.parse("content://nowhere/gone"))
-        assertNull(opener.open(adopted))
-        grants.forget(adopted.fingerprint)
+        assertNull("the platform owns the file", book.filePath)
+        assertEquals(uri, grants.uriFor(book.fingerprint))
+        assertTrue(file.exists())
+
+        // Opening resolves the grant: a session over a descriptor.
+        val session = opener.open(book)
+        assertNotNull(session)
+        assertTrue(session!!.title.isNotEmpty())
+        session.close()
+
+        // Then the grant is lost, or points nowhere, or the file is gone
+        // from under it: the row survives and the reader is told the file
+        // is out of reach rather than crashed.
+        grants.forget(book.fingerprint)
+        assertNull(opener.open(book))
+        grants.remember(book.fingerprint, Uri.parse("content://nowhere/gone"))
+        assertNull(opener.open(book))
+        grants.remember(book.fingerprint, uri)
+        assertTrue(file.delete())
+        assertNull(opener.open(book))
     }
 }

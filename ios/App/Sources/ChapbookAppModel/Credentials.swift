@@ -2,15 +2,18 @@ import Chapbook
 import Foundation
 import Security
 
-/// The credentials the app holds, keyed by origin.
+/// The credentials the app holds, keyed the way the engine keys them.
 ///
 /// A credential is an opaque `Authorization` header value — a Basic pair
 /// encoded, a bearer token, whatever the catalog took — and the key is
-/// the origin it is for, never a catalog URL, whose path may itself be a
-/// secret. Values sit in the Keychain, one generic-password item per
-/// origin under this app's service name. Nothing here prompts; a lookup
-/// is a lookup.
-public final class Credentials: Sendable {
+/// the engine's for the origin it is for (`App.credentialKey(for:)`),
+/// never a catalog URL, whose path may itself be a secret. The engine
+/// stores a sign-in through this class and reads it back before a fetch;
+/// the app's own code — the cover loader, a download job — asks the same
+/// way. Values sit in the Keychain, one generic-password item per key
+/// under this app's service name. Nothing here prompts; a lookup is a
+/// lookup, on whatever thread the engine is on.
+public final class Credentials: CredentialStore, Sendable {
     private let service: String
 
     public init(service: String) {
@@ -81,24 +84,19 @@ public final class Credentials: Sendable {
         Self.origin(of: url).flatMap(get)
     }
 
-    /// `scheme://host[:port]`, lower-cased, default ports dropped — the
-    /// key a credential lives under.
+    /// The key a credential for `url` lives under: the engine's, so a
+    /// sign-in the engine stored is what a cover request finds. `nil`
+    /// for anything that is not a URL with an origin.
     public static func origin(of url: URL) -> String? {
-        guard let scheme = url.scheme?.lowercased(), let host = url.host?.lowercased() else {
-            return nil
-        }
-        let port = url.port
-        let isDefault = (scheme == "http" && port == 80) || (scheme == "https" && port == 443)
-        if let port, !isDefault { return "\(scheme)://\(host):\(port)" }
-        return "\(scheme)://\(host)"
+        App.credentialKey(for: url)
     }
 
     public static func origin(of string: String) -> String? {
-        URL(string: string).flatMap(origin(of:))
+        App.credentialKey(for: string)
     }
 
     /// The Basic scheme's header value for a username and password.
     public static func basic(username: String, password: String) -> String {
-        "Basic " + Data("\(username):\(password)".utf8).base64EncodedString()
+        App.basicAuthorization(username: username, password: password)
     }
 }

@@ -1,6 +1,6 @@
 [package]
 name = "chapbook-app"
-description = "Toolkit-neutral application model for a full chapbook app"
+description = "The application policy layer: everything a chapbook app decides that is not a widget, written once for every front end"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -8,16 +8,34 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 
+[features]
+# Everything on: the desktop application's own profile. The C ABI and the
+# JNI binding forward what their platform wants and leave `desktop` off,
+# because it names the three things a phone must never assume — host
+# fonts, environment credentials and a bundled TLS stack.
+default = ["cbz", "pdf", "svg", "mathml", "catalog", "desktop"]
+cbz = ["chapbook-reader/cbz"]
+pdf = ["chapbook-reader/pdf"]
+svg = ["chapbook-reader/svg"]
+mathml = ["chapbook-reader/mathml"]
+# Catalogs, downloads and sync: the half of the application that talks to
+# a service. Off, the layer is a shelf, custody and a reader — the profile
+# a device with no radio wants, and the one a browser forces.
+catalog = ["chapbook-reader/opds", "dep:chapbook-opds", "dep:chapbook-sync"]
+# The bundled `ureq` transport, for a platform that supplies none: a
+# desktop process, a test slice. A phone never wants it — it ignores the
+# device's trust store — which is why it is a choice and not the default
+# fallback.
+bundled-http = ["catalog", "chapbook-reader/ureq", "chapbook-opds?/ureq", "chapbook-sync?/ureq"]
+# The desktop's answers to the platform questions: fonts from the host,
+# credentials from the environment, the bundled transport, the platform's
+# own library directory. Everything a phone injects instead.
+desktop = ["bundled-http"]
+
 [dependencies]
 chapbook-core = { workspace = true }
 chapbook-library = { workspace = true }
-chapbook-sync = { workspace = true, features = ["ureq"] }
-chapbook-opds = { workspace = true, features = ["ureq"] }
-chapbook-reader = { workspace = true, features = [
-    "cbz",
-    "pdf",
-    "opds",
-    "ureq",
-    "svg",
-    "mathml",
-] }
+chapbook-sync = { workspace = true, optional = true }
+chapbook-opds = { workspace = true, optional = true }
+chapbook-reader = { workspace = true, features = ["library"] }
+log = { workspace = true }

@@ -20,8 +20,8 @@ struct CatalogScreen: View {
         _vm = StateObject(
             wrappedValue: CatalogViewModel(
                 saved: placeholder,
-                session: CatalogSession(transport: container.http.transport, credentials: container.credentials),
-                credentials: container.credentials, downloads: container.downloads))
+                session: CatalogSession(platform: container.platform, savedID: Int64(catalogID)),
+                downloads: container.downloads))
     }
 
     private var title: String {

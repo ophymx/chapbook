@@ -1040,6 +1040,141 @@ impl Library {
         rows.collect::<rusqlite::Result<_>>().map_err(db_err)
     }
 
+    /// One catalog by id, `None` once it has been removed.
+    pub fn opds_source(&self, id: i64) -> Result<Option<OpdsSource>> {
+        self.conn
+            .query_row(
+                "SELECT id, url, title, auth_user
+                 FROM opds_sources WHERE id = ?1 AND deleted = 0",
+                params![id],
+                |row| {
+                    Ok(OpdsSource {
+                        id: row.get(0)?,
+                        url: row.get(1)?,
+                        title: row.get(2)?,
+                        auth_user: row.get(3)?,
+                    })
+                },
+            )
+            .optional()
+            .map_err(db_err)
+    }
+
+    /// Give a catalog a title — the one the reader typed, or the one its
+    /// feed announced once it was fetched. `None` clears it.
+    pub fn rename_opds_source(&mut self, id: i64, title: Option<&str>) -> Result<bool> {
+        let changed = self
+            .conn
+            .execute(
+                "UPDATE opds_sources SET title = ?2 WHERE id = ?1 AND deleted = 0",
+                params![id, title],
+            )
+            .map_err(db_err)?;
+        Ok(changed > 0)
+    }
+
+    /// Take a catalog off the list. Soft, like every delete here; the
+    /// books that came from it stay, and so do their sync targets — a
+    /// book's services are its own, not the catalog's.
+    pub fn remove_opds_source(&mut self, id: i64) -> Result<bool> {
+        let changed = self
+            .conn
+            .execute(
+                "UPDATE opds_sources SET deleted = 1 WHERE id = ?1 AND deleted = 0",
+                params![id],
+            )
+            .map_err(db_err)?;
+        Ok(changed > 0)
+    }
+
+    // ---- Grants ----
+    //
+    // How an adopted book is found again. The library records an adopted
+    // book by content and keeps no copy; the token that reopens the
+    // platform's file is the platform's own shape — a content URI, a
+    // security-scoped bookmark — and opaque here. Keyed by fingerprint,
+    // which identifies the file across a reinstall, where the row id only
+    // identifies the reader's history of it.
+
+    /// The token that reopens an adopted book, if one was remembered.
+    pub fn grant(&self, fingerprint: &str) -> Result<Option<Vec<u8>>> {
+        self.conn
+            .query_row(
+                "SELECT token FROM grants WHERE fingerprint = ?1",
+                params![fingerprint],
+                |row| row.get::<_, Vec<u8>>(0),
+            )
+            .optional()
+            .map_err(db_err)
+    }
+
+    /// Remember how to reach an adopted book. Replaces any earlier token.
+    pub fn set_grant(&mut self, fingerprint: &str, token: &[u8]) -> Result<()> {
+        self.conn
+            .execute(
+                "INSERT INTO grants (fingerprint, token, updated_at)
+                 VALUES (?1, ?2, strftime('%s','now'))
+                 ON CONFLICT(fingerprint) DO UPDATE SET
+                        token = ?2, updated_at = strftime('%s','now')",
+                params![fingerprint, token],
+            )
+            .map_err(db_err)?;
+        Ok(())
+    }
+
+    /// Forget how to reach an adopted book. Succeeds when nothing was
+    /// remembered.
+    pub fn clear_grant(&mut self, fingerprint: &str) -> Result<()> {
+        self.conn
+            .execute(
+                "DELETE FROM grants WHERE fingerprint = ?1",
+                params![fingerprint],
+            )
+            .map_err(db_err)?;
+        Ok(())
+    }
+
+    // ---- Preferences ----
+    //
+    // The application's own display preferences: what a front end shows,
+    // not what the engine lays out. Free-form and never secret. Kept here
+    // so a preference is one row for every front end rather than one
+    // platform store per app.
+
+    /// A preference's value, if set.
+    pub fn preference(&self, key: &str) -> Result<Option<String>> {
+        self.conn
+            .query_row(
+                "SELECT value FROM preferences WHERE key = ?1",
+                params![key],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(db_err)
+    }
+
+    /// Set a preference, replacing any earlier value.
+    pub fn set_preference(&mut self, key: &str, value: &str) -> Result<()> {
+        self.conn
+            .execute(
+                "INSERT INTO preferences (key, value, updated_at)
+                 VALUES (?1, ?2, strftime('%s','now'))
+                 ON CONFLICT(key) DO UPDATE SET
+                        value = ?2, updated_at = strftime('%s','now')",
+                params![key, value],
+            )
+            .map_err(db_err)?;
+        Ok(())
+    }
+
+    /// Unset a preference. Succeeds when it was never set.
+    pub fn clear_preference(&mut self, key: &str) -> Result<()> {
+        self.conn
+            .execute("DELETE FROM preferences WHERE key = ?1", params![key])
+            .map_err(db_err)?;
+        Ok(())
+    }
+
     // ---- Sync bookkeeping ----
     //
     // What this deliberately does *not* hold: a schedule. When to push is

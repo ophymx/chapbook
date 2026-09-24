@@ -136,6 +136,72 @@ internal object Native {
     external fun catalogAuthOffersBasic(handle: Long): Boolean
     external fun catalogFacets(handle: Long): LongArray
     external fun catalogFacetText(handle: Long, index: Int, field: Int): String?
+
+    // Browsing: the verbs the application layer added to a catalog. Codes
+    // are `catalogFetch`'s: 0 ok, -1 failed, -2 a login to draw, -3 no
+    // login was asked for. See `Catalog.go` and its neighbours.
+    external fun catalogGo(handle: Long, url: String): Int
+    external fun catalogBack(handle: Long): Boolean
+    external fun catalogLoadMore(handle: Long): Int
+    external fun catalogApplyFacet(handle: Long, index: Int): Int
+    external fun catalogSignIn(handle: Long, username: String, password: String): Int
+    external fun catalogState(handle: Long): Int
+    external fun catalogBrowseText(handle: Long, field: Int): String?
+
+    // The application: what the app module used to write for itself.
+    // One handle over the library directory, one thread's at a time,
+    // like the library it holds. See `App`.
+    external fun appOpen(libraryDir: String, credentials: CredentialStore, transport: SyncTransport, deviceName: String): Long
+    external fun appClose(handle: Long)
+    external fun appImport(handle: Long, path: String): Long
+
+    /** Takes ownership of [fd]; the caller must have detached it. */
+    external fun appAdoptFd(handle: Long, fd: Int, grant: ByteArray): Long
+    external fun appAdopt(handle: Long, session: Long, grant: ByteArray): Long
+    external fun appGrant(handle: Long, fingerprint: String): ByteArray?
+    external fun appRememberGrant(handle: Long, fingerprint: String, grant: ByteArray): Boolean
+    external fun appForgetGrant(handle: Long, fingerprint: String): Boolean
+
+    /** `[how, session]`: 0 a session, 1 adopted, 2 missing; empty on failure. */
+    external fun appOpenBook(handle: Long, book: Long): LongArray
+
+    /** Takes ownership of [fd]; the caller must have detached it. */
+    external fun appOpenFd(handle: Long, fd: Int): Long
+    external fun appProgressLabel(handle: Long): Int
+    external fun appSetProgressLabel(handle: Long, label: Int): Boolean
+    external fun appCatalogIds(handle: Long): LongArray
+    external fun appCatalogText(handle: Long, id: Long, field: Int): String?
+    external fun appAddCatalog(handle: Long, url: String, title: String): Long
+    external fun appRenameCatalog(handle: Long, id: Long, title: String): Boolean
+    external fun appRemoveCatalog(handle: Long, id: Long): Boolean
+    external fun appBrowse(handle: Long, id: Long): Long
+    external fun appLandDownload(handle: Long, file: String, progressionUrl: String?, annotationContainer: String?): Long
+    external fun appSyncAll(handle: Long, waker: Runnable?): Int
+    external fun appSyncBook(handle: Long, book: Long, waker: Runnable?): Boolean
+    external fun appSyncNext(handle: Long): LongArray
+    external fun appSyncDetail(handle: Long): String?
+    external fun appSyncMarksError(handle: Long): String?
+
+    // The reader's policy, over a session handle.
+    external fun readerPlace(handle: Long): DoubleArray
+    external fun readerCacheBudgetFor(availableBytes: Long): Long
+    external fun readerAfterMemoryWarning(handle: Long): Long
+    external fun readerShowHit(handle: Long, spine: Int, start: Int, end: Int): Boolean
+    external fun readerHighlightSelection(handle: Long): Long
+    external fun readerNoteOnSelection(handle: Long, body: String): Long
+
+    // A search walked one unit at a time on the session's thread.
+    external fun searchWalkOpen(query: String): Long
+    external fun searchWalkStep(handle: Long, session: Long): Boolean
+    external fun searchWalkHitCount(handle: Long): Int
+    external fun searchWalkHit(handle: Long, index: Int): LongArray
+    external fun searchWalkContext(handle: Long, index: Int): String?
+    external fun searchWalkClose(handle: Long)
+
+    /** 0 landed, 1 refused, 2 gone, 3 again. */
+    external fun downloadOutcome(status: Int): Int
+    external fun credentialKey(url: String): String?
+    external fun basicAuthorization(username: String, password: String): String
     external fun position(handle: Long): Long
     external fun title(handle: Long): String
     external fun renderSize(handle: Long): Long

@@ -31,8 +31,17 @@ public final class Session {
     /// Open a book. The configuration is spent either way; on failure the
     /// error's `message` says why — install [`EngineLog`] first and the
     /// engine narrates its own failures too.
-    public init(source: BookSource, configuration: SessionConfiguration) throws {
-        let config = try configuration.makeRaw()
+    public convenience init(source: BookSource, configuration: SessionConfiguration) throws {
+        try self.init(source: source, rawConfig: configuration.makeRaw())
+    }
+
+    /// A handle the engine opened elsewhere — `cb_app_open_book` — wrapped.
+    init(raw: OpaquePointer) {
+        self.raw = raw
+    }
+
+    /// Open over a C config the caller built; consumed either way.
+    init(source: BookSource, rawConfig config: OpaquePointer) throws {
         // Every open consumes `config`, success or not.
         let session: OpaquePointer? =
             switch source {

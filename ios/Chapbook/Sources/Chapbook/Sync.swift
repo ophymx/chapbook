@@ -43,6 +43,10 @@ public enum SyncReport: Hashable, Sendable {
     /// A batch finished; `books` says how many reports preceded this.
     /// The signal to stop showing a spinner.
     case finished(books: Int)
+    /// A batch could not start — the library would not answer. Only
+    /// `App.drainSyncReports()` reports it; a `SyncWorker` has its
+    /// library by then.
+    case broken(reason: String)
 
     /// What one book's reconcile did, half position and half marks.
     public struct BookReport: Hashable, Sendable {
@@ -185,11 +189,26 @@ public final class SyncWorker {
         let status = cb_sync_next(raw, &report)
         if status == C.unavailable { return nil }
         try check(status)
-        // The strings are borrowed from the handle and die on the next
-        // call; `String(cString:)` copies them out here.
+        return SyncReport(raw: report)
+    }
+
+    /// Everything reported since the last drain, oldest first.
+    public func drainReports() throws -> [SyncReport] {
+        var reports: [SyncReport] = []
+        while let report = try nextReport() { reports.append(report) }
+        return reports
+    }
+}
+
+extension SyncReport {
+    /// One report read out of its C form. The strings are borrowed from
+    /// the handle that produced it and die on the next call;
+    /// `String(cString:)` copies them out here. Shared by `SyncWorker`
+    /// and `App`, which fill the same struct.
+    init(raw report: cb_sync_report) {
         switch report.kind {
         case CB_SYNC_BOOK:
-            return .book(
+            self = .book(
                 SyncReport.BookReport(
                     book: report.book,
                     position: PositionOutcome(raw: report.position),
@@ -205,23 +224,18 @@ public final class SyncWorker {
                     listingTruncated: report.listing_truncated,
                     marksError: report.marks_error.map { String(cString: $0) }))
         case CB_SYNC_BOOK_FAILED:
-            return .bookFailed(
+            self = .bookFailed(
                 book: report.book,
                 reason: report.detail.map { String(cString: $0) } ?? "")
+        case CB_SYNC_BROKEN:
+            self = .broken(reason: report.detail.map { String(cString: $0) } ?? "")
         default:
-            return .finished(books: report.books)
+            self = .finished(books: report.books)
         }
-    }
-
-    /// Everything reported since the last drain, oldest first.
-    public func drainReports() throws -> [SyncReport] {
-        var reports: [SyncReport] = []
-        while let report = try nextReport() { reports.append(report) }
-        return reports
     }
 }
 
-private func syncWake(user: UnsafeMutableRawPointer?) {
+func syncWake(user: UnsafeMutableRawPointer?) {
     guard let user else { return }
     Unmanaged<WakerBox>.fromOpaque(user).takeUnretainedValue().handler()
 }

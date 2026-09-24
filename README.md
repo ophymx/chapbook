@@ -78,6 +78,8 @@ why. A shell depends on `chapbook-reader` alone; it re-exports the rest.
 | `tools/chapbook-cli` | Dev/test CLI exercising each pipeline stage | Not a library |
 | `chapbook-ffi` | The C ABI for hosts that speak C — iOS, embedders; `include/chapbook.h` | Contract |
 | `chapbook-jni` | Android JNI binding, paired with `android/` | Not a library |
+| `chapbook-app` | The application layer: what a reading app decides, shared by every front end through `Platform` | API |
+| `chapbook-app-gtk` | GTK4 desktop application over `chapbook-app` (Linux only) | Not a library |
 
 ## Embedding from another language
 
@@ -231,6 +233,7 @@ units resolved by approximation.
 |---|---|
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | The design: crate boundaries and why they fall where they do |
 | [docs/SHELLS.md](docs/SHELLS.md) | Writing a shell against `Session`: the loop, the loader rule, and the conformance harness |
+| [docs/APP.md](docs/APP.md) | The application layer above the session: which decisions are shared, which are the platform's, and how mobile, desktop and e-ink differ |
 | [docs/STABILITY.md](docs/STABILITY.md) | Which crates carry semver discipline, which are internals, and why |
 | [docs/LOCATORS.md](docs/LOCATORS.md) | Why reading positions are layered and versioned (the spec is `chapbook_core::locator`'s docs) |
 | [crates/opds-client/INTEROP.md](crates/opds-client/INTEROP.md) | What the OPDS client must interoperate with, and how it was verified |

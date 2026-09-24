@@ -82,10 +82,45 @@ sealed class SyncReport {
 
     /** A batch finished — the signal to stop showing a spinner. */
     data class Finished(val books: Long) : SyncReport()
+
+    /**
+     * A batch could not start — the library would not answer. Only
+     * [App.drainSync] reports it; a [SyncWorker] has its library by then.
+     */
+    data class Broken(val reason: String) : SyncReport()
 }
 
 /** What happened to a book's reading position. */
 enum class PositionOutcome { IDLE, PUSHED, PULLED, REFUSED, CONFLICT, FAILED }
+
+/**
+ * One drained report from its flattened form — `[kind, book, position,
+ * created, updated, deleted, adopted, refreshed, merged, conflicts,
+ * books, withdrawn, truncated]` — and the two strings read beside it.
+ * Shared by [SyncWorker.drain] and [App.drainSync], which flatten alike.
+ */
+internal fun syncReport(values: LongArray, detail: String?, marksError: String?): SyncReport =
+    when (values[0]) {
+        0L -> SyncReport.Book(
+            book = values[1],
+            position = PositionOutcome.entries
+                .getOrElse(values[2].toInt()) { PositionOutcome.FAILED },
+            detail = detail,
+            marksCreated = values[3],
+            marksUpdated = values[4],
+            marksDeleted = values[5],
+            marksAdopted = values[6],
+            marksRefreshed = values[7],
+            marksMerged = values[8],
+            marksConflicts = values[9],
+            marksWithdrawn = values[11],
+            listingTruncated = values[12] != 0L,
+            marksError = marksError,
+        )
+        1L -> SyncReport.BookFailed(values[1], detail ?: "")
+        3L -> SyncReport.Broken(detail ?: "")
+        else -> SyncReport.Finished(values[10])
+    }
 
 /**
  * A sync worker over one library, on its own thread.
@@ -124,28 +159,7 @@ class SyncWorker(
         while (true) {
             val values = Native.syncNext(handle)
             if (values.isEmpty()) break
-            out.add(
-                when (values[0]) {
-                    0L -> SyncReport.Book(
-                        book = values[1],
-                        position = PositionOutcome.entries
-                            .getOrElse(values[2].toInt()) { PositionOutcome.FAILED },
-                        detail = Native.syncDetail(handle),
-                        marksCreated = values[3],
-                        marksUpdated = values[4],
-                        marksDeleted = values[5],
-                        marksAdopted = values[6],
-                        marksRefreshed = values[7],
-                        marksMerged = values[8],
-                        marksConflicts = values[9],
-                        marksWithdrawn = values[11],
-                        listingTruncated = values[12] != 0L,
-                        marksError = Native.syncMarksError(handle),
-                    )
-                    1L -> SyncReport.BookFailed(values[1], Native.syncDetail(handle) ?: "")
-                    else -> SyncReport.Finished(values[10])
-                }
-            )
+            out.add(syncReport(values, Native.syncDetail(handle), Native.syncMarksError(handle)))
         }
         return out
     }

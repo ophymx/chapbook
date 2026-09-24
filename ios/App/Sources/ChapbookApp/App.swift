@@ -8,7 +8,9 @@ import SwiftUI
 import os
 
 @main
-struct ChapbookApplication: App {
+// `SwiftUI.App` spelled out: the package's own `App` is the application
+// layer, and the two share a name in this file.
+struct ChapbookApplication: SwiftUI.App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) private var delegate
 
     var body: some Scene {
@@ -40,7 +42,13 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
             default: log.info("\(target, privacy: .public): \(message, privacy: .public)")
             }
         }
-        container = AppContainer()
+        do {
+            container = try AppContainer()
+        } catch {
+            // No library means no app: the sandbox refused its own
+            // Application Support directory, which nothing here can mend.
+            fatalError("the library did not open: \(error)")
+        }
         super.init()
     }
 

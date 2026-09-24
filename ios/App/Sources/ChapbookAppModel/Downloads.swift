@@ -9,9 +9,12 @@ import Foundation
 /// but a credential, which is read from `Credentials` by origin when the
 /// task is made, so no secret sits in the transfer system's store and a
 /// token rotated meanwhile is simply fresh. When the file lands the job
-/// hands it to the shelf and records the sync services the entry
-/// carried, which live in the entry and nowhere else — the reason the
-/// request captured them before the transfer rather than after.
+/// hands it to the engine's landing, which shelves it and records the
+/// sync services the entry carried — they live in the entry and nowhere
+/// else, the reason the request captured them before the transfer rather
+/// than after. How a status is read is the engine's table too
+/// (`DownloadOutcome`), so this delegate and the Android worker cannot
+/// disagree about a 403.
 ///
 /// A background `URLSession` wants a delegate rather than a completion
 /// handler precisely because a transfer that survives suspension is a
@@ -128,9 +131,8 @@ public final class Downloads: ObservableObject {
     fileprivate func landed(_ id: Int, request: Catalog.DownloadRequest, file: URL) async {
         defer { try? FileManager.default.removeItem(at: file) }
         do {
-            let book = try await shelf.importFile(at: file)
-            try await shelf.setSyncTargets(
-                book: book, progressionURL: request.progressionURL,
+            let book = try await shelf.landDownload(
+                at: file, progressionURL: request.progressionURL,
                 annotationContainer: request.annotationContainer)
             settle(id, request: request, state: .landed(book: book))
             landings += 1
@@ -193,11 +195,17 @@ public final class Downloads: ObservableObject {
             let id = downloadTask.taskIdentifier
             let request = Downloads.request(of: downloadTask)
             // A refusal lands as a file too — the error page — so the
-            // status decides before the bytes are believed.
+            // status decides before the bytes are believed, read the way
+            // every front end reads it.
             let status = (downloadTask.response as? HTTPURLResponse)?.statusCode ?? 200
-            guard (200..<300).contains(status) else {
-                let reason = status == 401 || status == 403 ? "refused" : "gone (\(status))"
-                Task { @MainActor [owner] in owner?.failed(id, request: request, reason: reason) }
+            switch DownloadOutcome.of(status: status) {
+            case .landed:
+                break
+            case .refused:
+                Task { @MainActor [owner] in owner?.failed(id, request: request, reason: "refused") }
+                return
+            case .gone, .again:
+                Task { @MainActor [owner] in owner?.failed(id, request: request, reason: "gone (\(status))") }
                 return
             }
             guard let request else {

@@ -1,47 +1,41 @@
 package com.ophymx.chapbook.app.model
 
-import android.content.Context
-import androidx.core.content.edit
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.launch
 
-/** What the reader's progress readout says, beside the whole-book bar. */
-enum class ProgressLabel {
-    /** "34%" of the whole book. */
-    PERCENT,
-
-    /** "6 left in chapter" — how many pages remain in this unit. */
-    PAGES_LEFT,
-
-    /** "unit 6/20 · page 2/11" — the raw indices. */
-    CHAPTER_PAGE,
-}
+/** What the reader's progress readout says — the engine's choice set, the app's words. */
+typealias ProgressLabel = com.ophymx.chapbook.ProgressLabel
 
 /**
- * The app's display preferences.
+ * The app's display preferences, kept by the engine beside the shelf.
  *
- * These are the shell's, not the engine's: how the reader *shows* a
- * thing, not how it lays a page out. So they live in plain preferences
- * here rather than in `ReadingSettings`, which crosses the engine
- * boundary and drives layout. Nothing here is a secret.
+ * These are the shell's, not the reader's: how the reader *shows* a
+ * thing, not how it lays a page out. The value is read once at start
+ * and mirrored here so a screen can collect it; a change is shown at
+ * once and written behind the mirror.
  */
-class Preferences(context: Context) {
-    private val prefs = context.getSharedPreferences("preferences", Context.MODE_PRIVATE)
-
-    private val _progressLabel = MutableStateFlow(readProgressLabel())
+class Preferences(private val shelf: Shelf, private val scope: CoroutineScope) {
+    private val _progressLabel = MutableStateFlow(ProgressLabel.PERCENT)
     val progressLabel: StateFlow<ProgressLabel> = _progressLabel
 
-    fun setProgressLabel(label: ProgressLabel) {
-        prefs.edit { putString(KEY_PROGRESS, label.name) }
-        _progressLabel.value = label
+    /** Whether the reader chose before the stored value came back. */
+    private var chosen = false
+
+    init {
+        scope.launch {
+            val stored = shelf.withApp { progressLabel }
+            // The read raced a choice and lost: the choice is newer and
+            // already on its way to the store. Both run on the main
+            // thread, so the flag is read after the write that set it.
+            if (!chosen) _progressLabel.value = stored
+        }
     }
 
-    private fun readProgressLabel(): ProgressLabel =
-        prefs.getString(KEY_PROGRESS, null)?.let { name ->
-            runCatching { ProgressLabel.valueOf(name) }.getOrNull()
-        } ?: ProgressLabel.PERCENT
-
-    private companion object {
-        const val KEY_PROGRESS = "progress_label"
+    fun setProgressLabel(label: ProgressLabel) {
+        chosen = true
+        _progressLabel.value = label
+        scope.launch { shelf.withApp { progressLabel = label } }
     }
 }

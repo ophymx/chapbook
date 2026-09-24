@@ -68,7 +68,10 @@ chapbook-sync = { path = "crates/chapbook-sync", default-features = false }
 # inherited. External consumers get the full default set as usual.
 chapbook-reader = { path = "crates/chapbook-reader", default-features = false }
 chapbook-ffi = { path = "crates/chapbook-ffi", default-features = false }
-chapbook-app = { path = "crates/chapbook-app" }
+# Defaults off, like chapbook-reader: the C ABI and the JNI binding name
+# the profile their platform wants, and `desktop` is the one profile no
+# phone may inherit by accident. The GTK app asks for the defaults itself.
+chapbook-app = { path = "crates/chapbook-app", default-features = false }
 
 # The panel seam: update classes, the driver that holds the refresh rules,
 # and the backends underneath. It was chapbook's own module until it turned

@@ -72,7 +72,7 @@ import Testing
     }
     let book = try #require(try await app.shelf.book(id))
     #expect(book.fileURL == nil, "the platform owns the file")
-    #expect(app.grants.bookmark(for: book.fingerprint) != nil)
+    #expect(try await app.grants.bookmark(for: book.fingerprint) != nil)
     #expect(FileManager.default.fileExists(atPath: file.path))
 
     // Opening resolves the grant; a session over a descriptor.
@@ -92,28 +92,28 @@ import Testing
         return
     }
     let book = try #require(try await app.shelf.book(id))
-    let grant = try #require(app.grants.bookmark(for: book.fingerprint))
-    app.grants.forget(book.fingerprint)
+    let grant = try #require(try await app.grants.bookmark(for: book.fingerprint))
+    try await app.grants.forget(book.fingerprint)
     #expect(try app.opener.open(book) == nil)
-    app.grants.remember(Data("not a bookmark".utf8), for: book.fingerprint)
+    try await app.grants.remember(Data("not a bookmark".utf8), for: book.fingerprint)
     #expect(try app.opener.open(book) == nil)
     // The grant is good and the file is gone from under it.
-    app.grants.remember(grant, for: book.fingerprint)
+    try await app.grants.remember(grant, for: book.fingerprint)
     try FileManager.default.removeItem(at: file)
     #expect(try app.opener.open(book) == nil)
 }
 
-@Test @MainActor func aGrantIsRememberedByFingerprintAndForgotten() throws {
+@Test @MainActor func aGrantIsRememberedByFingerprintAndForgotten() async throws {
     let (app, dir) = try container("grants")
     defer { try? FileManager.default.removeItem(at: dir) }
 
     let fingerprint = "test-\(UUID().uuidString)"
     let bookmark = Data("bookmark".utf8)
-    #expect(app.grants.bookmark(for: fingerprint) == nil)
-    app.grants.remember(bookmark, for: fingerprint)
-    #expect(app.grants.bookmark(for: fingerprint) == bookmark)
-    app.grants.forget(fingerprint)
-    #expect(app.grants.bookmark(for: fingerprint) == nil)
+    #expect(try await app.grants.bookmark(for: fingerprint) == nil)
+    try await app.grants.remember(bookmark, for: fingerprint)
+    #expect(try await app.grants.bookmark(for: fingerprint) == bookmark)
+    try await app.grants.forget(fingerprint)
+    #expect(try await app.grants.bookmark(for: fingerprint) == nil)
 }
 
 @Test @MainActor func theShelfModelListsSortsFiltersAndMarks() async throws {

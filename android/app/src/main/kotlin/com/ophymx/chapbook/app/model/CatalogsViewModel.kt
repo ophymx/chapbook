@@ -9,7 +9,7 @@ import androidx.lifecycle.viewmodel.viewModelFactory
 class CatalogsViewModel(private val catalogs: Catalogs) : ViewModel() {
     val all = catalogs.all
 
-    fun add(url: String): SavedCatalog = catalogs.add(url)
+    fun add(url: String, onAdded: (SavedCatalog) -> Unit) = catalogs.add(url, onAdded = onAdded)
 
     fun rename(id: String, title: String) = catalogs.rename(id, title)
 

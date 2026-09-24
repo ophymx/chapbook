@@ -23,6 +23,11 @@ There are five shells in the workspace to read alongside it:
 
 Start from `minimal.rs`. It exists to be copied.
 
+A shell that is also an *app* — a shelf, catalogs, sign-ins, downloads,
+sync — has a second contract above this one: `chapbook-app`, which
+holds the decisions an app makes so that no front end makes them
+twice. `APP.md` is that contract; this document stays about the session.
+
 ## The shape of a shell
 
 ```rust
