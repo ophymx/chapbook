@@ -97,12 +97,12 @@ private struct FeedList: View {
     var body: some View {
         List {
             if !feed.facets.isEmpty {
-                FacetRows(facets: feed.facets, onFacet: vm.applyFacet)
+                FacetRows(facets: feed.facets, onFacet: { vm.applyFacet($0) })
                     .listRowInsets(EdgeInsets())
                     .listRowSeparator(.hidden)
             }
             ForEach(feed.entries, id: \.index) { entry in
-                EntryRow(entry: entry, http: http, onEntry: vm.openEntry, onDownload: vm.download)
+                EntryRow(entry: entry, http: http, onEntry: { vm.openEntry($0) }, onDownload: { vm.download($0) })
             }
             // Reaching the end asks for the next page — infinite scroll.
             if feed.nextPage != nil {

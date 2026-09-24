@@ -115,7 +115,7 @@ struct MarksSheet: View {
     var body: some View {
         NavigationStack {
             List {
-                Button(L("bookmark_page"), action: vm.addBookmark)
+                Button(L("bookmark_page"), action: { vm.addBookmark() })
                 if vm.marks.isEmpty {
                     Text(L("marks_empty")).font(.subheadline).foregroundStyle(.secondary)
                 } else {
@@ -207,7 +207,7 @@ struct SettingsSheet: View {
                     Section {
                         Toggle(L("scope_this_book"), isOn: $thisBook)
                         Text(L("scope_hint")).font(.caption).foregroundStyle(.secondary)
-                        Button(L("reset_book_settings"), action: vm.resetBookSettings)
+                        Button(L("reset_book_settings"), action: { vm.resetBookSettings() })
                     }
                 }
             }

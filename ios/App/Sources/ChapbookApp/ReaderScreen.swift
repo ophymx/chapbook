@@ -91,7 +91,7 @@ struct ReaderScreen: View {
     private func reader(_ reading: Reading) -> some View {
         PageViewRepresentable(
             session: reading.session, kind: reading.kind,
-            onMoved: vm.moved,
+            onMoved: { vm.moved($0) },
             onMenu: { chrome.toggle() },
             onPageFailed: { spine, message in toast = L("page_failed", spine + 1, message) },
             onExternalLink: { href in
@@ -111,7 +111,7 @@ struct ReaderScreen: View {
             if let bounds = selectionBounds {
                 SelectionBar(
                     bounds: bounds,
-                    onHighlight: vm.highlightSelection,
+                    onHighlight: { vm.highlightSelection() },
                     onNote: { noteDialog = true },
                     onCopy: {
                         UIPasteboard.general.string = vm.selection?.text ?? ""
@@ -187,7 +187,7 @@ struct ReaderScreen: View {
                     // The engine's Back: where the reader was before the
                     // last link, greyed out by absence rather than state.
                     if vm.place.canGoBack {
-                        Button(L("return_back"), action: vm.goBack)
+                        Button(L("return_back"), action: { vm.goBack() })
                     }
                 }
                 .padding(.horizontal, 16)

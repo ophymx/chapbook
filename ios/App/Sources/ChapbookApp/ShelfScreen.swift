@@ -27,7 +27,7 @@ struct ShelfScreen: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            StateChips(current: vm.state.state, onState: vm.setStateFilter)
+            StateChips(current: vm.state.state, onState: { vm.setStateFilter($0) })
             if vm.state.loading {
                 Spacer()
                 ProgressView()
@@ -62,7 +62,7 @@ struct ShelfScreen: View {
         }
         .navigationTitle(L("app_name"))
         .searchable(
-            text: Binding(get: { vm.state.search }, set: vm.setSearch),
+            text: Binding(get: { vm.state.search }, set: { vm.setSearch($0) }),
             prompt: L("shelf_search"))
         .toolbar {
             ToolbarItemGroup(placement: .topBarTrailing) {
@@ -71,7 +71,7 @@ struct ShelfScreen: View {
                 }
                 Button(action: onCatalogs) { Label(L("catalogs_open"), systemImage: "list.bullet") }
                 Menu {
-                    Picker(L("sort"), selection: Binding(get: { vm.state.sort }, set: vm.setSort)) {
+                    Picker(L("sort"), selection: Binding(get: { vm.state.sort }, set: { vm.setSort($0) })) {
                         Text(L("sort_read")).tag(ShelfSort.read)
                         Text(L("sort_added")).tag(ShelfSort.added)
                         Text(L("sort_title")).tag(ShelfSort.title)
