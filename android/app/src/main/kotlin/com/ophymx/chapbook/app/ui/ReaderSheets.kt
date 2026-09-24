@@ -1,5 +1,7 @@
 package com.ophymx.chapbook.app.ui
 
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -61,6 +63,7 @@ import com.ophymx.chapbook.SearchHit
 import com.ophymx.chapbook.Theme
 import com.ophymx.chapbook.TocEntry
 import com.ophymx.chapbook.app.R
+import com.ophymx.chapbook.app.model.ProgressLabel
 import com.ophymx.chapbook.app.model.SearchState
 import kotlinx.coroutines.delay
 import kotlin.math.roundToInt
@@ -211,6 +214,8 @@ fun SettingsSheet(
     settings: ReadingSettings?,
     fontFamily: String?,
     families: List<String>,
+    progressLabel: ProgressLabel,
+    onProgressLabel: (ProgressLabel) -> Unit,
     onSettings: (ReadingSettings, thisBook: Boolean) -> Unit,
     onFamily: (String?, thisBook: Boolean) -> Unit,
     onReset: () -> Unit,
@@ -218,7 +223,12 @@ fun SettingsSheet(
 ) {
     var thisBook by remember { mutableStateOf(false) }
     ModalBottomSheet(onDismissRequest = onDismiss) {
-        Column(Modifier.padding(horizontal = 24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Column(
+            Modifier
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 24.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
             Text(stringResource(R.string.settings), style = MaterialTheme.typography.titleMedium)
             if (settings == null) return@Column
 
@@ -292,6 +302,22 @@ fun SettingsSheet(
                             },
                         )
                     }
+                }
+            }
+
+            Text(stringResource(R.string.progress_label), style = MaterialTheme.typography.labelLarge)
+            SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+                val labels = listOf(
+                    ProgressLabel.PERCENT to R.string.progress_opt_percent,
+                    ProgressLabel.PAGES_LEFT to R.string.progress_opt_pages,
+                    ProgressLabel.CHAPTER_PAGE to R.string.progress_opt_chapter,
+                )
+                labels.forEachIndexed { i, (value, label) ->
+                    SegmentedButton(
+                        selected = progressLabel == value,
+                        onClick = { onProgressLabel(value) },
+                        shape = SegmentedButtonDefaults.itemShape(index = i, count = labels.size),
+                    ) { Text(stringResource(label)) }
                 }
             }
 

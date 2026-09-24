@@ -13,8 +13,12 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
+import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.List
@@ -25,6 +29,7 @@ import androidx.compose.material3.BottomAppBar
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.SnackbarHost
@@ -57,7 +62,10 @@ import com.ophymx.chapbook.Theme
 import com.ophymx.chapbook.app.R
 import com.ophymx.chapbook.app.container
 import com.ophymx.chapbook.app.model.ReaderState
+import com.ophymx.chapbook.app.model.Place
+import com.ophymx.chapbook.app.model.ProgressLabel
 import com.ophymx.chapbook.app.model.ReaderViewModel
+import kotlin.math.roundToInt
 import kotlinx.coroutines.launch
 
 /** Which sheet is up, if any. */
@@ -91,6 +99,7 @@ fun ReaderScreen(bookId: Long, onBack: () -> Unit) {
     val marks by vm.marks.collectAsStateWithLifecycle()
     val search by vm.search.collectAsStateWithLifecycle()
     val selection by vm.selection.collectAsStateWithLifecycle()
+    val progressLabel by vm.progressLabel.collectAsStateWithLifecycle()
 
     var chrome by remember { mutableStateOf(false) }
     var sheet by remember { mutableStateOf<Sheet?>(null) }
@@ -256,6 +265,8 @@ fun ReaderScreen(bookId: Long, onBack: () -> Unit) {
                         settings = settings,
                         fontFamily = fontFamily,
                         families = s.fontFamilies,
+                        progressLabel = progressLabel,
+                        onProgressLabel = vm::setProgressLabel,
                         onSettings = vm::applySettings,
                         onFamily = vm::setFontFamily,
                         onReset = vm::resetBookSettings,
@@ -284,16 +295,8 @@ fun ReaderScreen(bookId: Long, onBack: () -> Unit) {
                 title = {
                     Column {
                         Text(place.title, style = MaterialTheme.typography.titleMedium, maxLines = 1)
-                        Text(
-                            stringResource(
-                                R.string.reader_progress,
-                                place.spine + 1,
-                                place.spineLen,
-                                place.page + 1,
-                                place.pageCount,
-                            ),
-                            style = MaterialTheme.typography.labelSmall,
-                        )
+                        Spacer(Modifier.height(2.dp))
+                        ProgressReadout(place, progressLabel)
                     }
                 },
                 navigationIcon = {
@@ -342,4 +345,35 @@ private fun openExternal(context: Context, href: String): Boolean = try {
     true
 } catch (e: ActivityNotFoundException) {
     false
+}
+
+/** The whole-book bar, and a readout whose words are the reader's choice. */
+@Composable
+private fun ProgressReadout(place: Place, label: ProgressLabel) {
+    val text = when (label) {
+        ProgressLabel.PERCENT -> stringResource(R.string.progress_percent, (place.bookFraction * 100).roundToInt())
+        ProgressLabel.PAGES_LEFT -> {
+            val left = (place.pageCount - place.page - 1).coerceAtLeast(0)
+            if (left == 0) stringResource(R.string.progress_last_page) else stringResource(R.string.progress_pages_left, left)
+        }
+        ProgressLabel.CHAPTER_PAGE -> stringResource(
+            R.string.reader_progress,
+            place.spine + 1,
+            place.spineLen,
+            place.page + 1,
+            place.pageCount,
+        )
+    }
+    Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+        LinearProgressIndicator(
+            progress = { place.bookFraction },
+            modifier = Modifier.weight(1f).height(3.dp),
+        )
+        Spacer(Modifier.width(10.dp))
+        Text(
+            text,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
 }
