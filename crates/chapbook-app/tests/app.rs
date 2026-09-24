@@ -20,7 +20,7 @@ use chapbook_app::chapbook_reader::Session;
 use chapbook_app::chapbook_sync::{PositionReport, SyncEngine};
 use chapbook_app::reader::{self, Place, SearchWalk};
 use chapbook_app::{
-    App, Opened, Platform, ProgressLabel, ShelfFilter, SyncDriver, SyncRequest, SyncStatus,
+    App, Opened, Platform, ProgressLabel, Readout, ShelfFilter, SyncDriver, SyncRequest, SyncStatus,
 };
 
 struct TempDir(PathBuf);
@@ -508,15 +508,29 @@ fn the_place_is_spine_weighted_and_moves_with_the_reader() {
 
     let start = Place::of(&mut session);
     assert_eq!(start.title, session.title());
-    assert_eq!(start.book_fraction, 0.0);
     assert!(start.spine_len > 1 && start.page_count > 0);
     assert!(!start.can_go_back);
+    // A book opens at nothing read.
+    assert_eq!(start.book_fraction, 0.0);
+    assert_eq!(start.readout(ProgressLabel::Percent), Readout::Percent(0));
 
     assert!(session.apply(Action::NextUnit).needs_redraw());
     let moved = Place::of(&mut session);
-    assert!((moved.book_fraction - 1.0 / start.spine_len as f64).abs() < 0.001);
+    assert!((moved.book_fraction - 1.0 / start.spine_len as f64).abs() < 1e-9);
     assert!(moved.book_fraction <= 1.0);
     assert_eq!(moved.pages_left(), moved.page_count - 1);
+
+    // The last page of the last unit is the whole book, and the readouts
+    // agree about it: 100% beside no pages left.
+    let mut turns = 0;
+    while session.apply(Action::NextPage).needs_redraw() && turns < 100_000 {
+        turns += 1;
+    }
+    let end = Place::of(&mut session);
+    assert_eq!(end.spine, end.spine_len - 1);
+    assert_eq!(end.book_fraction, 1.0);
+    assert_eq!(end.pages_left(), 0);
+    assert_eq!(end.readout(ProgressLabel::Percent), Readout::Percent(100));
 }
 
 #[test]
@@ -537,7 +551,7 @@ fn a_memory_warning_halves_the_budget_to_a_floor() {
 
 #[test]
 fn a_search_walks_the_book_unit_by_unit_and_a_hit_can_be_shown() {
-    let dir = TempDir::new("search");
+    let dir = TempDir::new("walk");
     let mut app = open_app(&dir);
     let record = app.import(&fixture("long.epub")).expect("import");
     let mut session = session_of(app.open_book(record.id).expect("open"));

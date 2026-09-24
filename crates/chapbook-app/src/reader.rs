@@ -24,10 +24,15 @@ pub struct Place {
     pub spine_len: usize,
     pub page: usize,
     pub page_count: usize,
-    /// Whole-book progress, 0..=1, spine-weighted the way the engine's own
-    /// `book_progression` is: each unit a `1/spine_len` slice, the page's
-    /// place within it added. Every term is already in hand, so the bar
-    /// needs no engine call of its own.
+    /// Whole-book progress, 0..=1, spine-weighted: each unit a
+    /// `1/spine_len` slice, the page's place within it added — where this
+    /// page *begins*, like the position it is read from, so a book opens
+    /// at 0. The one exception is the last page of the last unit, which
+    /// is the whole book: 1.0, so the percent readout says 100 exactly
+    /// when `pages_left` says 0 with nothing after. Coarser than the
+    /// character-weighted progression the library stores — the shelf's
+    /// bar may disagree by a little — but every term is already in hand,
+    /// so the bar needs no engine call of its own.
     pub book_fraction: f64,
     /// Whether the engine's Back has anywhere to go — after a link, a
     /// contents jump, a mark. What decides whether a *Return* is drawn.
@@ -46,7 +51,10 @@ impl Place {
         } else {
             0.0
         };
-        let book_fraction = if spine_len > 0 {
+        let last_page = position.spine + 1 == spine_len && position.page + 1 == page_count;
+        let book_fraction = if last_page {
+            1.0
+        } else if spine_len > 0 {
             ((position.spine as f64 + within) / spine_len as f64).clamp(0.0, 1.0)
         } else {
             0.0

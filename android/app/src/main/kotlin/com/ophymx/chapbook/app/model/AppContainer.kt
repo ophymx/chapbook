@@ -32,7 +32,7 @@ class AppContainer(context: Context) {
     val grants = Grants(shelf)
     val opener = Opener(context, shelf)
     val keys = KeyRouter()
-    val catalogs = Catalogs(shelf)
+    val catalogs = Catalogs(shelf, scope)
     val downloads = Downloads(context)
     val preferences = Preferences(shelf, scope)
 

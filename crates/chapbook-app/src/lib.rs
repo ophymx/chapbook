@@ -608,38 +608,15 @@ impl App {
         }
     }
 
+    /// A client over the platform's one transport, which an `Arc` lends
+    /// as is — `opds-client` implements its transport trait for one.
     #[cfg(feature = "catalog")]
     fn catalog_client(&self) -> Result<chapbook_opds::OpdsClient> {
-        Ok(chapbook_opds::OpdsClient::new(SharedTransport(
-            self.transport()?,
-        )))
+        Ok(chapbook_opds::OpdsClient::new(self.transport()?))
     }
 }
 
 const PREF_PROGRESS_LABEL: &str = "progress_label";
-
-/// A platform's one transport, lent to a client that wants to own one.
-#[cfg(feature = "catalog")]
-struct SharedTransport(Arc<dyn HttpClient>);
-
-#[cfg(feature = "catalog")]
-impl HttpClient for SharedTransport {
-    fn get(
-        &self,
-        request: chapbook_opds::HttpRequest,
-    ) -> std::result::Result<chapbook_opds::HttpResponse, chapbook_opds::HttpError> {
-        self.0.get(request)
-    }
-
-    fn send(
-        &self,
-        method: chapbook_opds::http::HttpMethod,
-        request: chapbook_opds::HttpRequest,
-        body: Option<Vec<u8>>,
-    ) -> std::result::Result<chapbook_opds::HttpResponse, chapbook_opds::HttpError> {
-        self.0.send(method, request, body)
-    }
-}
 
 // ---- The desktop's words ----
 //

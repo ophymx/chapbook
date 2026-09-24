@@ -20,11 +20,21 @@ class Preferences(private val shelf: Shelf, private val scope: CoroutineScope) {
     private val _progressLabel = MutableStateFlow(ProgressLabel.PERCENT)
     val progressLabel: StateFlow<ProgressLabel> = _progressLabel
 
+    /** Whether the reader chose before the stored value came back. */
+    private var chosen = false
+
     init {
-        scope.launch { _progressLabel.value = shelf.withApp { progressLabel } }
+        scope.launch {
+            val stored = shelf.withApp { progressLabel }
+            // The read raced a choice and lost: the choice is newer and
+            // already on its way to the store. Both run on the main
+            // thread, so the flag is read after the write that set it.
+            if (!chosen) _progressLabel.value = stored
+        }
     }
 
     fun setProgressLabel(label: ProgressLabel) {
+        chosen = true
         _progressLabel.value = label
         scope.launch { shelf.withApp { progressLabel = label } }
     }
