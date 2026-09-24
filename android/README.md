@@ -24,18 +24,20 @@ rustup target add aarch64-linux-android x86_64-linux-android
 cargo install cargo-ndk
 
 export ANDROID_NDK_HOME=$HOME/Android/Sdk/ndk/<version>
+export ANDROID_HOME=$HOME/Android/Sdk
 ./android/build-jni.sh release
 cd android && ./gradlew :demo:assembleDebug
+./gradlew :chapbook:connectedDebugAndroidTest   # with a device or AVD attached
 ```
 
 Prerequisites that are not guessable:
 
 - **The NDK is the only prerequisite, and it is not optional.** The engine
-  cross-compiles clean with no NDK at all except for two C dependencies:
+  cross-compiles clean with no NDK at all except for one C dependency:
   bundled SQLite (`libsqlite3-sys`, on every build path — the library is
-  where positions live) and `ring` (TLS, only with the `opds` feature).
-  Both want the NDK's clang; `cargo-ndk` exists to set `CC`/`AR` per
-  target and nothing else needs configuring.
+  where positions live). It wants the NDK's clang; `cargo-ndk` exists to
+  set `CC`/`AR` per target and nothing else needs configuring. (`ring`
+  would be the second, but this binding bundles no TLS — see below.)
 - **NDK 28.2 rather than the newest**: the current stable line, and it
   emits 16 KB page alignment by default, which Android 15 requires of
   anything targeting API 35+.
@@ -55,8 +57,11 @@ is bundled (`rusqlite`'s `bundled` feature is the only supported
 arrangement for native code, not a workaround) and crypto is bundled too.
 The part that must **not** be bundled is the trust store: `webpki-roots`
 ignores enterprise roots, user CAs, network security config and OS root
-updates. The day OPDS ships on Android, the answer is
-`rustls-platform-verifier`, which asks the device's `X509TrustManager`.
+updates. OPDS and sync ship on Android with no Rust TLS at all: the
+binding's `opds` feature leaves `ureq` off, and `Catalog` and `SyncWorker`
+both fetch through a Kotlin `SyncTransport` over the platform's own HTTP
+stack, so the trust store is the device's by construction and the app
+attaches its own credentials per request.
 Two sysroot entries are actively wanted: `libjnigraphics`
 (`AndroidBitmap_lockPixels`, the `render_into` destination) and
 `libnativewindow` for a `SurfaceView` path later.
@@ -71,6 +76,24 @@ Both produce a complete, installable app that dies on the device, and
   `System.loadLibrary`.
 - A drifted `external fun` name fails at first call — Kotlin and Rust
   never reference each other at compile time.
+
+What that check does not reach is whether a call *answers correctly*,
+and the one place that is asserted is `chapbook/src/androidTest`. It is
+instrumented rather than a JVM unit test because the `.so` links
+`libjnigraphics`, which no desktop JVM can load, so it runs on a device
+or the AVD (`connectedDebugAndroidTest`) and CI, having no emulator, does
+not run it. `DownloadFlowTest` pins the background-download flow taken
+apart — `Catalog.downloadRequest` → a `WorkManager` job the app runs →
+`Library.importFile` → `Library.setSyncTargets` — against the same
+fixtures and properties `swift test` pins for iOS: the URL crosses
+absolute, the id opaque, `Accept` alone with no `Authorization`, nothing
+fetched while describing, a navigation row answers null, an extensionless
+file shelves and is not consumed, the same bytes twice are one row, the
+services read back after the import, and junk fails instead of crashing.
+The navigation-row check is the one that catches the bug this class of
+test exists for: swap the download-URL field for the href and it fails.
+What no test here reaches is a worker actually surviving a suspended
+process; that is device-only and the platform's promise.
 
 ## Conventions worth keeping
 

@@ -19,8 +19,10 @@ crate-type = ["cdylib", "rlib"]
 # the formats it reads gets a session that remembers nothing — no
 # position, no annotations, no settings — and nothing says so. It opens,
 # renders and conforms; it just never comes back where it was left.
-# `opds` stays off: it is the only feature that pulls in TLS, and the
-# trust-store question is not settled here (see `android/README.md`).
+# `opds` is on and pulls in no TLS: chapbook-reader's feature enables
+# opds-client without its `ureq` default, so nothing here opens a socket.
+# Catalog and sync both fetch through a Kotlin transport (below), which
+# is how the trust-store question in `android/README.md` was answered.
 chapbook-reader = { workspace = true, features = ["library", "cbz", "pdf", "opds", "svg", "mathml"] }
 # Deliberately without `ureq`: a bundled TLS stack would trust
 # webpki-roots and ignore Android's user CAs, enterprise roots and

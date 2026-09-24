@@ -217,8 +217,15 @@ restating wherever a shell author looks:
   iOS app background transfer, system trust and ATS, costs Android
   `WorkManager`, and is unavailable in WASM. So `opds-client` opens no
   sockets: the caller injects a blocking `HttpClient` (`UreqHttp` is the
-  default impl behind a feature), and `HttpClient::download` exists to
-  be overridden by a host that owns a background download facility.
+  default impl behind a feature). A blocking transport cannot be
+  background transfer, so a host that owns one does not override the
+  transport — it reads the entry's download URL, filename and media
+  type (`CB_ENTRY_DOWNLOAD_*`, `Entry::download_request`) and its two
+  sync services (`CB_ENTRY_PROGRESSION_URL`,
+  `CB_ENTRY_ANNOTATION_CONTAINER`), runs the fetch under its own job
+  system with its own credential, and hands the finished file to
+  `cb_library_import_file`. Read the sync
+  services before the transfer; the feed is gone by the time it lands.
 - **Credentials belong to the platform's store.** A
   `chapbook_core::CredentialStore` is injected through `SessionConfig`;
   the value is an opaque `Authorization` header, the key is a stable
