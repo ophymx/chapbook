@@ -1078,3 +1078,76 @@ fn a_long_shelf_pages() {
 
     std::fs::remove_dir_all(&dir).ok();
 }
+
+// ---- v8: what the application layer keeps beside the shelf ----
+
+#[test]
+fn a_grant_is_kept_by_fingerprint_and_forgotten() {
+    let (mut library, dir) = temp_library();
+    assert_eq!(library.grant("fp-1").unwrap(), None);
+    library.set_grant("fp-1", b"content://provider/42").unwrap();
+    assert_eq!(
+        library.grant("fp-1").unwrap().as_deref(),
+        Some(&b"content://provider/42"[..])
+    );
+    // A token is bytes, not text: a bookmark is binary and may hold NULs.
+    library.set_grant("fp-1", &[0, 1, 2, 0, 255]).unwrap();
+    assert_eq!(library.grant("fp-1").unwrap(), Some(vec![0, 1, 2, 0, 255]));
+    library.clear_grant("fp-1").unwrap();
+    assert_eq!(library.grant("fp-1").unwrap(), None);
+    library.clear_grant("fp-1").unwrap();
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn a_preference_round_trips_and_clears() {
+    let (mut library, dir) = temp_library();
+    assert_eq!(library.preference("progress_label").unwrap(), None);
+    library.set_preference("progress_label", "pages_left").unwrap();
+    assert_eq!(
+        library.preference("progress_label").unwrap().as_deref(),
+        Some("pages_left")
+    );
+    library.set_preference("progress_label", "percent").unwrap();
+    assert_eq!(
+        library.preference("progress_label").unwrap().as_deref(),
+        Some("percent")
+    );
+    library.clear_preference("progress_label").unwrap();
+    assert_eq!(library.preference("progress_label").unwrap(), None);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn a_catalog_is_listed_in_order_renamed_and_removed() {
+    let (mut library, dir) = temp_library();
+    let a = library
+        .add_opds_source("https://a.test/opds/", None, None)
+        .unwrap();
+    let b = library
+        .add_opds_source("https://b.test/opds/", Some("B"), None)
+        .unwrap();
+    let urls: Vec<String> = library
+        .opds_sources()
+        .unwrap()
+        .into_iter()
+        .map(|s| s.url)
+        .collect();
+    assert_eq!(urls, ["https://a.test/opds/", "https://b.test/opds/"]);
+    assert!(library.rename_opds_source(a, Some("A")).unwrap());
+    assert_eq!(
+        library.opds_source(a).unwrap().unwrap().title.as_deref(),
+        Some("A")
+    );
+    assert!(library.remove_opds_source(b).unwrap());
+    assert!(!library.remove_opds_source(b).unwrap(), "already gone");
+    assert!(library.opds_source(b).unwrap().is_none());
+    let ids: Vec<i64> = library
+        .opds_sources()
+        .unwrap()
+        .into_iter()
+        .map(|s| s.id)
+        .collect();
+    assert_eq!(ids, [a]);
+    let _ = std::fs::remove_dir_all(dir);
+}

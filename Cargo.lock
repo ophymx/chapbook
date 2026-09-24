@@ -528,6 +528,7 @@ dependencies = [
  "chapbook-opds",
  "chapbook-reader",
  "chapbook-sync",
+ "log",
 ]
 
 [[package]]

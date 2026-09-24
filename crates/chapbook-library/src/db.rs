@@ -313,6 +313,37 @@ const MIGRATIONS: &[&str] = &[
            COALESCE(b.series, '')
       FROM books b;
     ",
+    // v8
+    "
+    -- Two small tables the *application* layer keeps, beside the shelf
+    -- rather than in a platform's preference store, so every front end
+    -- over this library answers the same questions the same way.
+
+    -- How an adopted book is reached again. An adopted row has an empty
+    -- file_path: the platform owns the file, and what it holds is a
+    -- token that reopens it — a persisted content URI on Android, a
+    -- security-scoped bookmark on iOS, a plain path on a desktop that
+    -- adopts. The token is the platform's and opaque here; the library
+    -- only keeps it under the fingerprint, which is the key that survives
+    -- a reinstall (the row id is the reader's history of the book, not
+    -- its identity across installs).
+    CREATE TABLE grants (
+        fingerprint TEXT PRIMARY KEY,
+        token BLOB NOT NULL,
+        updated_at INTEGER NOT NULL
+    );
+
+    -- The app's own display preferences: how a reader *shows* a thing,
+    -- not how a page is laid out (that is reading_settings, which crosses
+    -- into the engine). Free-form key and value, nothing secret, and no
+    -- schema per preference — a front end that gains a preference gains a
+    -- key, not a migration.
+    CREATE TABLE preferences (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL,
+        updated_at INTEGER NOT NULL
+    );
+    ",
 ];
 
 pub(crate) fn open_and_migrate(path: &std::path::Path) -> Result<Connection> {

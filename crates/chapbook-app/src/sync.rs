@@ -172,8 +172,13 @@ fn authorize(engine: &mut SyncEngine, store: &dyn CredentialStore, book: BookId)
 /// The device identity sync speaks as, minted once and kept beside the
 /// library. `chapbook-sync` deliberately neither generates nor persists
 /// one, so the application does — the same file the CLI writes, because a
-/// terminal and a window on the same machine are the same device.
-pub(crate) fn device_identity(dir: &Path) -> Result<chapbook_opds::progression::Device> {
+/// terminal and a window on the same machine are the same device. The
+/// name is the platform's: what a progression service shows beside this
+/// device's position.
+pub(crate) fn device_identity(
+    dir: &Path,
+    name: &str,
+) -> Result<chapbook_opds::progression::Device> {
     let path = dir.join("device");
     let id = match std::fs::read_to_string(&path) {
         Ok(existing) if !existing.trim().is_empty() => existing.trim().to_string(),
@@ -190,7 +195,7 @@ pub(crate) fn device_identity(dir: &Path) -> Result<chapbook_opds::progression::
     };
     Ok(chapbook_opds::progression::Device {
         id,
-        name: "chapbook-app".to_string(),
+        name: name.to_string(),
     })
 }
 
