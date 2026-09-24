@@ -192,15 +192,23 @@ stays that way.
   assumed), HTTP Basic at any point in a flow plus OPDS Authentication
   Document login.
   **It opens no sockets.** The caller injects an `HttpClient` — a blocking
-  three-method trait over `HttpRequest`/`HttpResponse` — because a bundled
-  networking stack is what `docs/PLATFORM.md` found costs an iOS app background
-  transfer, system trust and ATS, costs Android `WorkManager`, and is
-  simply unavailable in WASM. `UreqHttp` (blocking `ureq` + rustls, no
-  async runtime) is one implementation behind the default `ureq` feature;
-  `--no-default-features` drops ureq, rustls and the root store and the
-  crate still does everything but fetch. `HttpClient::download` has a
-  default that streams to a temp file and renames, and exists to be
-  overridden by a host that owns a background download facility.
+  two-method trait (`get`, `send`) over `HttpRequest`/`HttpResponse` —
+  because a bundled networking stack is what `docs/PLATFORM.md` found costs
+  an iOS app background transfer, system trust and ATS, costs Android
+  `WorkManager`, and is simply unavailable in WASM. `UreqHttp` (blocking
+  `ureq` + rustls, no async runtime) is one implementation behind the
+  default `ureq` feature; `--no-default-features` drops ureq, rustls and
+  the root store and the crate still does everything but fetch.
+  **A blocking transport is not background transfer**, and no override of
+  it can be: a transfer that must survive the app being suspended is a
+  job, not a call. `OpdsClient::download` fetches through the transport
+  (streams to a `.part`, renames) for a process that stays alive; a phone
+  takes the other door — `Entry::download_request` describes the fetch
+  (URL, suggested filename, media type; never a credential) and steps
+  aside, the host runs it under `WorkManager` or a background
+  `URLSession`, and the finished file comes back through the library's
+  import. The two sync service links are read *before* the transfer,
+  because by the time a background download lands the feed is gone.
   Full requirements: `crates/opds-client/INTEROP.md` (it travels with the
   crate); wire-format fixtures: `fixtures/opds/`.
 - **chapbook-opds** — the binding, and the only part of the above that
