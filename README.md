@@ -139,7 +139,9 @@ cd android && ./gradlew :demo:assembleDebug
 ## iOS
 
 `ios/` is a Swift package, `Chapbook`, over the C header — a library for
-building iOS ereader apps, plus a small demo app that picks a book, stores
+building iOS ereader apps — the application built on it (`ios/App`: the
+shelf, a catalog browser with background downloads and sign-in, and the
+reader with its chrome), plus a small demo app that picks a book, stores
 a security-scoped bookmark, and reopens it cold at the page the reader
 left. Read [ios/README.md](ios/README.md), including the platform notes.
 

@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- What Xcode signs a simulator build with, and what the Keychain
+         checks before it will hold anything for the app: without an
+         application identifier every SecItemAdd answers -34018 and each
+         launch asks the reader to sign in again. -->
+    <key>application-identifier</key><string>CHAPBOOK00.com.ophymx.chapbook</string>
+    <key>keychain-access-groups</key><array><string>CHAPBOOK00.com.ophymx.chapbook</string></array>
+    <key>get-task-allow</key><true/>
+</dict>
+</plist>

@@ -20,6 +20,8 @@
 /ios/Chapbook/Chapbook.xcframework/
 /ios/Chapbook/.build/
 /ios/demo/build/
+/ios/App/.build/
+/ios/App/build/
 
 # Windows: MSBuild's per-project output, and the native DLL that
 # `build-native.ps1` copies beside a package. The DLL is a build product of
