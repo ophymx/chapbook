@@ -22,6 +22,7 @@ import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.AlertDialog
@@ -69,7 +70,7 @@ import java.io.File
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ShelfScreen(onOpen: (Long) -> Unit) {
+fun ShelfScreen(onOpen: (Long) -> Unit, onCatalogs: () -> Unit) {
     val container = androidx.compose.ui.platform.LocalContext.current.container
     val vm: ShelfViewModel = viewModel(factory = ShelfViewModel.factory(container))
     val state by vm.state.collectAsStateWithLifecycle()
@@ -107,7 +108,15 @@ fun ShelfScreen(onOpen: (Long) -> Unit) {
         topBar = {
             TopAppBar(
                 title = { Text(stringResource(R.string.app_name)) },
-                actions = { SortMenu(state.sort, vm::setSort) },
+                actions = {
+                    IconButton(onClick = onCatalogs) {
+                        Icon(
+                            Icons.AutoMirrored.Filled.List,
+                            contentDescription = stringResource(R.string.catalogs_open),
+                        )
+                    }
+                    SortMenu(state.sort, vm::setSort)
+                },
             )
         },
         floatingActionButton = {

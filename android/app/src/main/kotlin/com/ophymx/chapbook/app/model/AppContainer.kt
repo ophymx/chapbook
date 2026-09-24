@@ -22,6 +22,10 @@ class AppContainer(context: Context) {
     val grants = Grants(context)
     val opener = Opener(context, libraryDir, shelf, grants)
     val keys = KeyRouter()
+    val credentials = Credentials(context)
+    val http = Http(credentials)
+    val catalogs = Catalogs(context)
+    val downloads = Downloads(context)
 
     /**
      * A file another app asked us to open, waiting for a screen to take

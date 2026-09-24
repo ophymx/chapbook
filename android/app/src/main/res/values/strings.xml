@@ -79,4 +79,31 @@
     <string name="color_blue">Blue</string>
     <string name="color_pink">Pink</string>
     <string name="remove_highlight">Remove highlight</string>
+    <!-- Catalogs -->
+    <string name="catalogs">Catalogs</string>
+    <string name="catalogs_open">Browse catalogs</string>
+    <string name="catalogs_empty">No catalogs yet.</string>
+    <string name="catalogs_empty_hint">Add an OPDS catalog to browse and download books.</string>
+    <string name="catalog_add">Add a catalog</string>
+    <string name="catalog_url">Catalog URL</string>
+    <string name="catalog_url_hint">https://example.org/opds/</string>
+    <string name="add">Add</string>
+    <string name="rename">Rename</string>
+    <string name="catalog_name">Name</string>
+    <string name="catalog_failed">This catalog could not be reached.</string>
+    <string name="retry">Retry</string>
+    <string name="get">Get</string>
+    <string name="queued">Downloading %1$s</string>
+    <string name="download_failed">%1$s could not be downloaded.</string>
+    <string name="loading_more">Loading more…</string>
+    <string name="facets">Filter</string>
+    <string name="sign_in">Sign in</string>
+    <string name="sign_in_to">Sign in to %1$s</string>
+    <string name="username">Username</string>
+    <string name="password">Password</string>
+    <string name="sign_in_unavailable">This catalog needs a sign-in method the app cannot offer.</string>
+    <string name="downloads">Downloads</string>
+    <string name="downloading">Downloading %1$s</string>
+    <string name="downloaded">%1$s is on your shelf</string>
+    <string name="downloads_active">%1$d downloading</string>
 </resources>

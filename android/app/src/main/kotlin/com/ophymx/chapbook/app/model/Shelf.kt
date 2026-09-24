@@ -42,4 +42,11 @@ class Shelf(private val dir: File) {
     /** Copy a file into the library. Blocking by nature; this hops off the caller's thread. */
     suspend fun importFile(path: String): Long? =
         withContext(thread) { library.importFile(path) }
+
+    /** Record where a book syncs — the two services off the catalog entry it came from. */
+    suspend fun setSyncTargets(book: Long, progressionUrl: String?, annotationContainer: String?): Boolean =
+        withContext(thread) { library.setSyncTargets(book, progressionUrl, annotationContainer) }
+
+    suspend fun syncProgressionUrl(book: Long): String? =
+        withContext(thread) { library.syncProgressionUrl(book) }
 }

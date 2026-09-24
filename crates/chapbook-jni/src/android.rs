@@ -3310,6 +3310,67 @@ pub extern "system" fn Java_com_ophymx_chapbook_Native_catalogPageHref(
     }
 }
 
+/// Every facet of the held feed, flattened: for each, `[group, active,
+/// count, hasCount]`, four numbers per facet in feed order, grouped as
+/// the catalog groups them — `group` is an index a host draws one control
+/// per. Empty with nothing fetched or no facets, which is ordinary.
+#[no_mangle]
+pub extern "system" fn Java_com_ophymx_chapbook_Native_catalogFacets(
+    env: JNIEnv,
+    _class: JClass,
+    handle: jlong,
+) -> jlongArray {
+    let values: Vec<jlong> = unsafe { catalog(handle) }
+        .and_then(|catalog| {
+            let feed = catalog.feed.as_ref()?;
+            let mut out = Vec::new();
+            for (group, (_, links)) in feed.facet_groups().into_iter().enumerate() {
+                for link in links {
+                    out.push(group as jlong);
+                    out.push(link.active_facet as jlong);
+                    out.push(link.count.unwrap_or(0) as jlong);
+                    out.push(link.count.is_some() as jlong);
+                }
+            }
+            Some(out)
+        })
+        .unwrap_or_default();
+    long_array_out(&env, &values)
+}
+
+/// One of a facet's strings, by its index in `catalogFacets`' order: 0 the
+/// label ("English"), 1 the group's name ("Language"), 2 the URL that
+/// applies it, resolved — hand it to `catalogFetch`. Null past the end.
+#[no_mangle]
+pub extern "system" fn Java_com_ophymx_chapbook_Native_catalogFacetText(
+    env: JNIEnv,
+    _class: JClass,
+    handle: jlong,
+    index: jint,
+    field: jint,
+) -> jstring {
+    use chapbook_reader::chapbook_opds::resolve_url;
+    let value = unsafe { catalog(handle) }.and_then(|catalog| {
+        let base = catalog.base.clone();
+        let feed = catalog.feed.as_ref()?;
+        let groups = feed.facet_groups();
+        let (group, link) = groups
+            .iter()
+            .flat_map(|(name, links)| links.iter().map(move |l| (name, *l)))
+            .nth(index as usize)?;
+        match field {
+            0 => Some(link.title.clone().unwrap_or_else(|| link.href.clone())),
+            1 => Some(group.clone()),
+            2 => Some(resolve_url(&base, &link.href)),
+            _ => None,
+        }
+    });
+    match value {
+        Some(value) => string_out(&env, &value),
+        None => JObject::null().into_raw(),
+    }
+}
+
 /// Whether the held catalog offers a search.
 #[no_mangle]
 pub extern "system" fn Java_com_ophymx_chapbook_Native_catalogHasSearch(
