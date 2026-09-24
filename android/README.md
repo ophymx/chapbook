@@ -5,7 +5,8 @@ Two Gradle modules over one Rust binding:
 | | |
 |---|---|
 | `chapbook/` | library module → AAR; `jniLibs/{arm64-v8a,x86_64}/libchapbook.so` |
-| `demo/` | app module: one `View`, one book, the conformance report |
+| `demo/` | app module: one `View`, one book, the conformance report — the spike, kept as the binding's harness |
+| `app/` | the application: Compose over the AAR, a Kotlin model layer, tests for that layer |
 | `build-jni.sh` | cargo-ndk into `jniLibs`, then the two link checks below |
 
 The native half is `crates/chapbook-jni`, a direct Rust binding over
@@ -47,6 +48,67 @@ Prerequisites that are not guessable:
   JBR is not the escape hatch it looks like (Java 25, which Gradle
   refuses). Install a JDK (`openjdk-21-jdk` on Debian); no `JAVA_HOME`, no
   toolchain settings needed.
+
+## The app
+
+`app/` is a reading application over the AAR, and its shape is
+`chapbook-app`'s one level up: everything that is not a widget lives in
+`app/src/main/kotlin/.../model` — which books the shelf shows and in what
+order (recently read first, the same default as the desktop app and the
+CLI), how a file becomes a book, how a book is opened and found again,
+and the threads the engine's rules demand — and nothing in that package
+imports Compose, so all of it runs under `ShelfModelTest` with no screen.
+The screens (`ui/`) ask the model and draw. The desktop model crate
+itself is not used: it bundles `ureq`, reads credentials from the
+environment, refuses adopted books and keeps English strings in Rust,
+each of which is wrong on a phone, while every decision it holds already
+has a Kotlin home in the AAR.
+
+**Custody follows the grant.** A file picked through `OpenDocument` has
+a read grant that persists, so it is *adopted*: the library records it
+by content, keeps no copy, and `Grants` maps the fingerprint to the URI
+for next launch. A file arriving through a `VIEW` intent has a one-shot
+grant, so it is *imported* — copied while the bytes are still ours,
+because there is no way to reach the file again. Both land on the same
+shelf; `Book.filePath` tells them apart, and `Opener.open` takes
+whichever door the row has.
+
+**The page is a `View` inside Compose** (`ui/PageView.kt`), because the
+render is `render_into` on a locked `Bitmap` and TalkBack wants an
+accessibility node provider, and both are `View` contracts. It is the
+demo's view with a gesture detector: taps in thirds, a fling toward the
+leading edge (the book's, read from `readingDirection`), the middle band
+answering `toggle-menu` which the view acts on itself since the engine
+has no menu. Volume keys arrive at the activity and reach the page
+through `KeyRouter`, installed while the reader is showing. The session
+lives in `ReaderViewModel`, not the view: a rotation recreates the view
+and must not reopen the book. It is opened on an IO thread, handed to
+the main thread, and closed exactly once when the screen is popped. The
+page reads its position *after each draw*, because a restored position
+lands on the first frame, not at open. The page never goes under the
+status bar or the camera cutout: the reader box takes the safe drawing
+insets and the app's background fills the rest.
+
+**Memory** is the phone's to say: `cacheBudget` is set at open to a
+quarter of `ActivityManager.memoryClass`, halved on a real
+`onTrimMemory` warning, and `releaseCaches` follows every warning.
+`suspend` runs from `ON_STOP`, the last callback Android guarantees.
+
+Verified on a Pixel 6 Pro (Android 17): the shelf with covers, search,
+sort and state filters; a book in through the `VIEW` intent; page turns
+by tap, fling and volume key, one page per input; the chrome toggling
+from the middle band; position restored across close and reopen;
+rotation keeping the book open; home, a memory trim and return; and
+`ShelfModelTest` (5) plus the library module's tests (7) through
+`connectedDebugAndroidTest`. Not yet built: reader chrome beyond the
+title bar (contents, settings, marks, selection, search), the catalog,
+downloads and sync — the phases that follow.
+
+The app's dependencies are pinned to the last releases built against
+`compileSdk 36`: everything after mid-2026 wants `compileSdk 37` and
+AGP 9.1, which is a toolchain move for all three modules and a task of
+its own. Kotlin is 2.4.20 across the project; `kotlinOptions` is gone
+from that line, so the modules use `kotlin { compilerOptions { … } }`.
 
 ## What the platform lends you, and what it does not
 

@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Compose paints everything; the platform theme only has to stay
+         out of the way and not draw an action bar over the page. -->
+    <style name="Theme.Chapbook" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@android:color/transparent</item>
+    </style>
+</resources>
