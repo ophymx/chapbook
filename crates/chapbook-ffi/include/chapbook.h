@@ -2139,11 +2139,14 @@ cb_status cb_catalog_load_more(struct cb_catalog *catalog, bool *appended);
 cb_status cb_catalog_apply_facet(struct cb_catalog *catalog, size_t index);
 
 /**
- * Sign in to the catalog that refused: store the credential by the
- * refused URL's origin — through the app's credential store, never by
- * the URL — and fetch it again without moving a crumb. A store that
- * cannot keep it still signs this session in. `CB_ERR_UNAVAILABLE` when
- * the state is not `CB_BROWSE_LOGIN`. Blocking.
+ * Sign in to the catalog that refused: try the refused request again
+ * with the credential — the feed, or the search it was refused for —
+ * and, once it is accepted, store it by the refused URL's origin,
+ * through the app's credential store and never by the URL. A refused
+ * password is not kept, so nothing else that reads the store sends it.
+ * A store that cannot keep it still signs this session in. No crumb
+ * moves. `CB_ERR_UNAVAILABLE` when the state is not `CB_BROWSE_LOGIN`.
+ * Blocking.
  */
 cb_status cb_catalog_sign_in(struct cb_catalog *catalog,
                              const char *username,
