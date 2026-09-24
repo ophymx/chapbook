@@ -3238,15 +3238,10 @@ pub extern "system" fn Java_com_ophymx_chapbook_Native_catalogEntryText(
             // Resolved by the application layer even though the parser
             // already did it against the request URL: a no-op on an
             // absolute href, and what stops a root-relative service path
-            // reaching the library as a path.
-            12 => catalog
-                .inner
-                .download(index as usize)
-                .and_then(|d| d.progression_url),
-            13 => catalog
-                .inner
-                .download(index as usize)
-                .and_then(|d| d.annotation_container),
+            // reaching the library as a path. Independent of whether
+            // there is anything to download, like the flags.
+            12 => catalog.inner.sync_targets(index as usize).0,
+            13 => catalog.inner.sync_targets(index as usize).1,
             _ => None,
         }
     });
@@ -3509,10 +3504,11 @@ pub extern "system" fn Java_com_ophymx_chapbook_Native_catalogApplyFacet(
     }
 }
 
-/// Sign in to the catalog that refused: store the credential by the
-/// refused URL's origin — through the app's store, never by the URL —
-/// and fetch it again without moving a crumb. Codes are `catalogFetch`'s;
-/// -3 when nothing asked for a login.
+/// Sign in to the catalog that refused: try the refused request again
+/// with the credential and, once it is accepted, store it by the refused
+/// URL's origin — through the app's store, never by the URL. A refused
+/// password is not kept. No crumb moves. Codes are `catalogFetch`'s; -3
+/// when nothing asked for a login.
 #[no_mangle]
 pub extern "system" fn Java_com_ophymx_chapbook_Native_catalogSignIn(
     mut env: JNIEnv,

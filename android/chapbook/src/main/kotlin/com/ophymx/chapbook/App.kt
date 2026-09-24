@@ -201,7 +201,7 @@ class App private constructor(private var handle: Long) : AutoCloseable {
     data class CatalogRecord(val id: Long, val title: String, val url: String)
 
     /** The catalogs the reader has added, in the order they were added. */
-    fun catalogs(): List<CatalogRecord> = Native.appCatalogIds(handle).mapNotNull { catalog(it) }
+    fun catalogs(): List<CatalogRecord> = Native.appCatalogIds(handle).asList().mapNotNull { catalog(it) }
 
     /** One saved catalog, or null once removed. */
     fun catalog(id: Long): CatalogRecord? {

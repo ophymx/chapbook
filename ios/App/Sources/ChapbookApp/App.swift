@@ -8,7 +8,9 @@ import SwiftUI
 import os
 
 @main
-struct ChapbookApplication: App {
+// `SwiftUI.App` spelled out: the package's own `App` is the application
+// layer, and the two share a name in this file.
+struct ChapbookApplication: SwiftUI.App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) private var delegate
 
     var body: some Scene {

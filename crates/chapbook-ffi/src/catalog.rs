@@ -655,15 +655,12 @@ pub unsafe extern "C" fn cb_catalog_entry_text(
                 // parser already did it against the request URL: a no-op
                 // on an absolute href, and what stops a root-relative
                 // service path — which real catalogs do serve — reaching
-                // the library as a path.
-                cb_entry_field::CB_ENTRY_PROGRESSION_URL => catalog
-                    .inner
-                    .download(index)
-                    .and_then(|download| download.progression_url),
-                cb_entry_field::CB_ENTRY_ANNOTATION_CONTAINER => catalog
-                    .inner
-                    .download(index)
-                    .and_then(|download| download.annotation_container),
+                // the library as a path. Independent of whether there is
+                // anything to download, like the flags that predict them.
+                cb_entry_field::CB_ENTRY_PROGRESSION_URL => catalog.inner.sync_targets(index).0,
+                cb_entry_field::CB_ENTRY_ANNOTATION_CONTAINER => {
+                    catalog.inner.sync_targets(index).1
+                }
             };
             let Some(value) = value else {
                 return fail(

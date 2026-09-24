@@ -757,7 +757,7 @@ pub unsafe extern "C" fn cb_app_forget_grant(
 }
 
 /// What opening a shelf row came to.
-#[repr(u32)]
+#[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum cb_opened {
     /// The library's own copy, open: `session` is set.
@@ -825,7 +825,7 @@ pub unsafe extern "C" fn cb_app_open_book(
 // ---- Preferences ----
 
 /// What the reader's progress readout says, beside the whole-book bar.
-#[repr(u32)]
+#[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum cb_progress_label {
     /// Percent of the whole book.
@@ -1257,7 +1257,7 @@ pub unsafe extern "C" fn cb_search_walk_close(walk: *mut cb_search_walk) {
 // ---- Saved catalogs ----
 
 /// Which string a saved catalog accessor answers with.
-#[repr(u32)]
+#[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum cb_saved_catalog_field {
     /// What the reader called it, or what its feed did; may be empty.
@@ -1488,7 +1488,7 @@ pub unsafe extern "C" fn cb_app_browse(
 }
 
 /// What a catalog screen shows.
-#[repr(u32)]
+#[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum cb_browse_state {
     /// Nothing fetched yet.
@@ -1505,7 +1505,7 @@ pub enum cb_browse_state {
 }
 
 /// Which string [`cb_catalog_browse_text`] answers with.
-#[repr(u32)]
+#[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum cb_browse_field {
     /// What goes at the top: the held feed's title, or the saved
@@ -1645,11 +1645,14 @@ pub unsafe extern "C" fn cb_catalog_apply_facet(
     })
 }
 
-/// Sign in to the catalog that refused: store the credential by the
-/// refused URL's origin — through the app's credential store, never by
-/// the URL — and fetch it again without moving a crumb. A store that
-/// cannot keep it still signs this session in. `CB_ERR_UNAVAILABLE` when
-/// the state is not `CB_BROWSE_LOGIN`. Blocking.
+/// Sign in to the catalog that refused: try the refused request again
+/// with the credential — the feed, or the search it was refused for —
+/// and, once it is accepted, store it by the refused URL's origin,
+/// through the app's credential store and never by the URL. A refused
+/// password is not kept, so nothing else that reads the store sends it.
+/// A store that cannot keep it still signs this session in. No crumb
+/// moves. `CB_ERR_UNAVAILABLE` when the state is not `CB_BROWSE_LOGIN`.
+/// Blocking.
 #[no_mangle]
 pub unsafe extern "C" fn cb_catalog_sign_in(
     catalog: *mut crate::catalog::cb_catalog,
@@ -1748,7 +1751,7 @@ pub unsafe extern "C" fn cb_catalog_browse_text(
 // ---- Downloads ----
 
 /// How a platform transfer's HTTP status is read.
-#[repr(u32)]
+#[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum cb_download_outcome {
     /// The file is the book. Land it with [`cb_app_land_download`].

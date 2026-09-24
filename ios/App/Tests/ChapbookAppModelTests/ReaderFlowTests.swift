@@ -143,9 +143,9 @@ private func reader(_ name: String) async throws -> (ReaderViewModel, Reading, A
 }
 
 @Test @MainActor func closingTheScreenSavesThePlaceForTheShelf() async throws {
-    let (vm, reading, _, dir) = try await reader("close")
+    let (vm, reading, app, dir) = try await reader("close")
     defer { try? FileManager.default.removeItem(at: dir) }
-    let shelf = Shelf(directory: dir)
+    let shelf = app.shelf
     #expect(try await shelf.book(reading.book.id)?.state == .unread)
     _ = try reading.session.nextPage()
     vm.close()

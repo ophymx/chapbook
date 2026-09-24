@@ -147,11 +147,7 @@ typedef uint32_t cb_format;
 /**
  * What opening a shelf row came to.
  */
-enum cb_opened
-#if defined(__cplusplus) || __STDC_VERSION__ >= 202311L
-  : uint32_t
-#endif // defined(__cplusplus) || __STDC_VERSION__ >= 202311L
- {
+typedef enum cb_opened {
     /**
      * The library's own copy, open: `session` is set.
      */
@@ -169,23 +165,12 @@ enum cb_opened
      * reach. `session` is null.
      */
     CB_OPENED_MISSING = 2,
-};
-#ifndef __cplusplus
-#if __STDC_VERSION__ >= 202311L
-typedef enum cb_opened cb_opened;
-#else
-typedef uint32_t cb_opened;
-#endif // __STDC_VERSION__ >= 202311L
-#endif // __cplusplus
+} cb_opened;
 
 /**
  * What the reader's progress readout says, beside the whole-book bar.
  */
-enum cb_progress_label
-#if defined(__cplusplus) || __STDC_VERSION__ >= 202311L
-  : uint32_t
-#endif // defined(__cplusplus) || __STDC_VERSION__ >= 202311L
- {
+typedef enum cb_progress_label {
     /**
      * Percent of the whole book.
      */
@@ -198,23 +183,12 @@ enum cb_progress_label
      * Unit and page, as raw indices.
      */
     CB_PROGRESS_CHAPTER_PAGE = 2,
-};
-#ifndef __cplusplus
-#if __STDC_VERSION__ >= 202311L
-typedef enum cb_progress_label cb_progress_label;
-#else
-typedef uint32_t cb_progress_label;
-#endif // __STDC_VERSION__ >= 202311L
-#endif // __cplusplus
+} cb_progress_label;
 
 /**
  * Which string a saved catalog accessor answers with.
  */
-enum cb_saved_catalog_field
-#if defined(__cplusplus) || __STDC_VERSION__ >= 202311L
-  : uint32_t
-#endif // defined(__cplusplus) || __STDC_VERSION__ >= 202311L
- {
+typedef enum cb_saved_catalog_field {
     /**
      * What the reader called it, or what its feed did; may be empty.
      */
@@ -223,23 +197,12 @@ enum cb_saved_catalog_field
      * Opaque and possibly secret-bearing: never log it.
      */
     CB_SAVED_CATALOG_URL = 1,
-};
-#ifndef __cplusplus
-#if __STDC_VERSION__ >= 202311L
-typedef enum cb_saved_catalog_field cb_saved_catalog_field;
-#else
-typedef uint32_t cb_saved_catalog_field;
-#endif // __STDC_VERSION__ >= 202311L
-#endif // __cplusplus
+} cb_saved_catalog_field;
 
 /**
  * What a catalog screen shows.
  */
-enum cb_browse_state
-#if defined(__cplusplus) || __STDC_VERSION__ >= 202311L
-  : uint32_t
-#endif // defined(__cplusplus) || __STDC_VERSION__ >= 202311L
- {
+typedef enum cb_browse_state {
     /**
      * Nothing fetched yet.
      */
@@ -259,23 +222,12 @@ enum cb_browse_state
      * `CB_BROWSE_FAILURE_URL` and `CB_BROWSE_FAILURE_REASON` say what.
      */
     CB_BROWSE_FAILED = 3,
-};
-#ifndef __cplusplus
-#if __STDC_VERSION__ >= 202311L
-typedef enum cb_browse_state cb_browse_state;
-#else
-typedef uint32_t cb_browse_state;
-#endif // __STDC_VERSION__ >= 202311L
-#endif // __cplusplus
+} cb_browse_state;
 
 /**
  * Which string [`cb_catalog_browse_text`] answers with.
  */
-enum cb_browse_field
-#if defined(__cplusplus) || __STDC_VERSION__ >= 202311L
-  : uint32_t
-#endif // defined(__cplusplus) || __STDC_VERSION__ >= 202311L
- {
+typedef enum cb_browse_field {
     /**
      * What goes at the top: the held feed's title, or the saved
      * catalog's until there is one.
@@ -303,23 +255,12 @@ enum cb_browse_field
      * sentence for the reader.
      */
     CB_BROWSE_FAILURE_REASON = 5,
-};
-#ifndef __cplusplus
-#if __STDC_VERSION__ >= 202311L
-typedef enum cb_browse_field cb_browse_field;
-#else
-typedef uint32_t cb_browse_field;
-#endif // __STDC_VERSION__ >= 202311L
-#endif // __cplusplus
+} cb_browse_field;
 
 /**
  * How a platform transfer's HTTP status is read.
  */
-enum cb_download_outcome
-#if defined(__cplusplus) || __STDC_VERSION__ >= 202311L
-  : uint32_t
-#endif // defined(__cplusplus) || __STDC_VERSION__ >= 202311L
- {
+typedef enum cb_download_outcome {
     /**
      * The file is the book. Land it with [`cb_app_land_download`].
      */
@@ -339,14 +280,7 @@ enum cb_download_outcome
      * job system does when told.
      */
     CB_DOWNLOAD_AGAIN = 3,
-};
-#ifndef __cplusplus
-#if __STDC_VERSION__ >= 202311L
-typedef enum cb_download_outcome cb_download_outcome;
-#else
-typedef uint32_t cb_download_outcome;
-#endif // __STDC_VERSION__ >= 202311L
-#endif // __cplusplus
+} cb_download_outcome;
 
 /**
  * What kind of report [`cb_sync_next`] filled in.
@@ -2019,17 +1953,17 @@ cb_status cb_app_forget_grant(struct cb_app *app, const char *fingerprint);
 cb_status cb_app_open_book(const struct cb_app *app,
                            int64_t book,
                            struct cb_session **session,
-                           cb_opened *how);
+                           enum cb_opened *how);
 
 /**
  * The reader's chosen readout. Percent until they choose.
  */
-cb_status cb_app_progress_label(const struct cb_app *app, cb_progress_label *label);
+cb_status cb_app_progress_label(const struct cb_app *app, enum cb_progress_label *label);
 
 /**
  * Keep the reader's choice of readout, for every launch after this.
  */
-cb_status cb_app_set_progress_label(struct cb_app *app, cb_progress_label label);
+cb_status cb_app_set_progress_label(struct cb_app *app, enum cb_progress_label label);
 
 /**
  * Read the place off a session. Lays the current unit out if nothing
@@ -2135,7 +2069,7 @@ cb_status cb_app_catalog_id(const struct cb_app *app, size_t index, int64_t *id)
  */
 cb_status cb_app_catalog_text(const struct cb_app *app,
                               size_t index,
-                              cb_saved_catalog_field field,
+                              enum cb_saved_catalog_field field,
                               char *buf,
                               size_t cap,
                               size_t *needed);
@@ -2218,14 +2152,14 @@ cb_status cb_catalog_sign_in(struct cb_catalog *catalog,
 /**
  * What the screen shows now.
  */
-cb_status cb_catalog_state(const struct cb_catalog *catalog, cb_browse_state *state);
+cb_status cb_catalog_state(const struct cb_catalog *catalog, enum cb_browse_state *state);
 
 /**
  * One of the browse strings. `CB_ERR_UNAVAILABLE` for a field the
  * current state does not carry.
  */
 cb_status cb_catalog_browse_text(const struct cb_catalog *catalog,
-                                 cb_browse_field field,
+                                 enum cb_browse_field field,
                                  char *buf,
                                  size_t cap,
                                  size_t *needed);
@@ -2235,7 +2169,7 @@ cb_status cb_catalog_browse_text(const struct cb_catalog *catalog,
  * response — is `CB_DOWNLOAD_AGAIN`: a transfer that never reached the
  * service is a network condition, not a verdict.
  */
-cb_download_outcome cb_download_outcome_of_status(uint16_t status);
+enum cb_download_outcome cb_download_outcome_of_status(uint16_t status);
 
 /**
  * Everything a landed download does: import the file the platform's
