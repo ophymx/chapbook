@@ -56,23 +56,16 @@ use crate::abi::{str_in, str_out};
 #[cfg(feature = "opds")]
 use crate::error::clear_last_error;
 
-/// An open catalog client, holding the last feed it fetched. Opaque.
+/// An open catalog, holding the last feed it fetched — and, since the
+/// application layer arrived, the crumb trail that led there and the
+/// login it was last refused with; see [`cb_catalog_go`](crate::cb_catalog_go)
+/// and its neighbours in the `app` module. Opaque.
 ///
 /// Not thread-safe, like every other handle here: it belongs to one
 /// thread at a time, and may move between them.
 pub struct cb_catalog {
     #[cfg(feature = "opds")]
-    client: chapbook_reader::chapbook_opds::OpdsClient,
-    /// The URL the current feed came from — what relative hrefs in it
-    /// resolve against.
-    #[cfg(feature = "opds")]
-    base: String,
-    #[cfg(feature = "opds")]
-    feed: Option<chapbook_reader::chapbook_opds::Feed>,
-    /// The authentication document from the last `CB_ERR_AUTH_REQUIRED`,
-    /// held so a host can build its login screen from it.
-    #[cfg(feature = "opds")]
-    auth: Option<chapbook_reader::chapbook_opds::AuthDocument>,
+    pub(crate) inner: chapbook_app::Catalog,
 }
 
 /// What an entry is, which decides what tapping it does.
@@ -181,16 +174,17 @@ fn entry_at(
     catalog: &cb_catalog,
     index: usize,
 ) -> Result<&chapbook_reader::chapbook_opds::Entry, cb_status> {
-    let Some(feed) = &catalog.feed else {
+    if catalog.inner.feed().is_none() {
         return Err(fail(
             cb_status::CB_ERR_UNAVAILABLE,
             "nothing has been fetched yet",
         ));
-    };
-    feed.entries.get(index).ok_or_else(|| {
+    }
+    let entries = catalog.inner.entries();
+    entries.get(index).ok_or_else(|| {
         fail(
             cb_status::CB_ERR_INVALID_ARGUMENT,
-            format!("entry index {index} out of {}", feed.entries.len()),
+            format!("entry index {index} out of {}", entries.len()),
         )
     })
 }
@@ -232,6 +226,7 @@ pub unsafe extern "C" fn cb_catalog_open(
             let client = match get {
                 Some(get) => OpdsClient::new(crate::http::host::HostTransport {
                     get,
+                    send: None,
                     finalize,
                     user: user as usize,
                 }),
@@ -253,11 +248,16 @@ pub unsafe extern "C" fn cb_catalog_open(
                     }
                 }
             };
+            // No store and no saved row: a host that opens a catalog this
+            // way manages the credential itself, through
+            // `cb_catalog_set_authorization`. `cb_app_browse` is the door
+            // with a store behind it.
             let handle = Box::new(cb_catalog {
-                client,
-                base: String::new(),
-                feed: None,
-                auth: None,
+                inner: chapbook_app::Catalog::new(
+                    client,
+                    std::sync::Arc::new(chapbook_reader::chapbook_core::NoCredentials),
+                    String::new(),
+                ),
             });
             // SAFETY: checked non-null above.
             unsafe { *out = Box::into_raw(handle) };
@@ -301,14 +301,14 @@ pub unsafe extern "C" fn cb_catalog_set_authorization(
             clear_last_error();
             let catalog = catalog_mut!(catalog);
             if value.is_null() {
-                catalog.client.clear_authorization();
+                catalog.inner.client().clear_authorization();
                 return cb_status::CB_OK;
             }
             // SAFETY: the header's contract.
             let Some(value) = (unsafe { str_in(value, "value") }) else {
                 return cb_status::CB_ERR_INVALID_UTF8;
             };
-            catalog.client.set_authorization(value);
+            catalog.inner.client().set_authorization(value);
             cb_status::CB_OK
         })
     })
@@ -336,7 +336,7 @@ pub unsafe extern "C" fn cb_catalog_set_basic_auth(
             }) else {
                 return cb_status::CB_ERR_NULL_ARGUMENT;
             };
-            catalog.client.set_basic_auth(username, password);
+            catalog.inner.client().set_basic_auth(username, password);
             cb_status::CB_OK
         })
     })
@@ -364,14 +364,9 @@ pub unsafe extern "C" fn cb_catalog_fetch(
             let Some(url) = (unsafe { str_in(url, "url") }) else {
                 return cb_status::CB_ERR_NULL_ARGUMENT;
             };
-            match catalog.client.fetch(url) {
-                Ok(feed) => {
-                    catalog.base = url.to_string();
-                    catalog.feed = Some(feed);
-                    catalog.auth = None;
-                    cb_status::CB_OK
-                }
-                Err(e) => opds_failure(catalog, e),
+            match catalog.inner.fetch(url) {
+                Ok(()) => cb_status::CB_OK,
+                Err(e) => opds_failure(e),
             }
         })
     })
@@ -395,44 +390,34 @@ pub unsafe extern "C" fn cb_catalog_search(
             let Some(query) = (unsafe { str_in(query, "query") }) else {
                 return cb_status::CB_ERR_NULL_ARGUMENT;
             };
-            let Some(feed) = &catalog.feed else {
+            if catalog.inner.feed().is_none() {
                 return fail(cb_status::CB_ERR_UNAVAILABLE, "nothing has been fetched yet");
-            };
-            if feed.search().is_none() {
+            }
+            if !catalog.inner.has_search() {
                 return fail(
                     cb_status::CB_ERR_UNAVAILABLE,
                     "this catalog offers no search",
                 );
             }
-            let base = catalog.base.clone();
-            match catalog.client.search(feed, &base, query) {
-                Ok(results) => {
-                    catalog.feed = Some(results);
-                    catalog.auth = None;
-                    cb_status::CB_OK
-                }
-                Err(e) => opds_failure(catalog, e),
+            match catalog.inner.search(query) {
+                Ok(()) => cb_status::CB_OK,
+                Err(e) => opds_failure(e),
             }
         })
     })
 }
 
-/// Turn an OPDS error into a status, keeping an authentication document
-/// where a host can reach it.
+/// Turn an OPDS error into a status. The authentication document, when
+/// there was one, is already held by the catalog for the `cb_catalog_auth_*`
+/// calls.
 #[cfg(feature = "opds")]
-fn opds_failure(
-    catalog: &mut cb_catalog,
-    error: chapbook_reader::chapbook_opds::OpdsError,
-) -> cb_status {
+pub(crate) fn opds_failure(error: chapbook_reader::chapbook_opds::OpdsError) -> cb_status {
     use chapbook_reader::chapbook_opds::OpdsError;
     match error {
-        OpdsError::AuthRequired(document) => {
-            catalog.auth = document.map(|boxed| *boxed);
-            fail(
-                cb_status::CB_ERR_AUTH_REQUIRED,
-                "the catalog wants credentials",
-            )
-        }
+        OpdsError::AuthRequired(_) => fail(
+            cb_status::CB_ERR_AUTH_REQUIRED,
+            "the catalog wants credentials",
+        ),
         OpdsError::Network(message) => fail(cb_status::CB_ERR_NETWORK, message),
         OpdsError::Http(status) => fail(
             cb_status::CB_ERR_OPDS,
@@ -454,7 +439,7 @@ pub unsafe extern "C" fn cb_catalog_feed_title(
         with_opds!((catalog, buf, cap, needed) {
             clear_last_error();
             let catalog = catalog_ref!(catalog);
-            let Some(feed) = &catalog.feed else {
+            let Some(feed) = catalog.inner.feed() else {
                 return fail(cb_status::CB_ERR_UNAVAILABLE, "nothing has been fetched yet");
             };
             // SAFETY: the header's contract for the buffer triple.
@@ -473,14 +458,14 @@ pub unsafe extern "C" fn cb_catalog_entry_count(
         with_opds!((catalog, count) {
             clear_last_error();
             let catalog = catalog_ref!(catalog);
-            let Some(feed) = &catalog.feed else {
+            if catalog.inner.feed().is_none() {
                 return fail(cb_status::CB_ERR_UNAVAILABLE, "nothing has been fetched yet");
-            };
+            }
             if count.is_null() {
                 return fail(cb_status::CB_ERR_NULL_ARGUMENT, "count out-pointer is null");
             }
             // SAFETY: checked non-null just above.
-            unsafe { *count = feed.entries.len() };
+            unsafe { *count = catalog.inner.entries().len() };
             cb_status::CB_OK
         })
     })
@@ -505,7 +490,10 @@ pub unsafe extern "C" fn cb_catalog_entry(
                 Err(code) => return code,
             };
             let acquisition = entry.acquisitions().next();
-            let (progression, container) = chapbook_sync_targets(entry);
+            let (progression, container) = {
+                let (p, c) = chapbook_app::chapbook_sync::targets_of(entry);
+                (p.is_some(), c.is_some())
+            };
             let filled = cb_entry {
                 // An entry with something to acquire is a book; one with
                 // only a plain link is a place to go.
@@ -538,41 +526,6 @@ pub unsafe extern "C" fn cb_catalog_entry(
             cb_status::CB_OK
         })
     })
-}
-
-/// Whether an entry advertises the two sync services, without naming
-/// their URLs — those are opaque and possibly secret-bearing, and
-/// [`cb_catalog_download`] is what records them.
-#[cfg(feature = "opds")]
-fn chapbook_sync_targets(entry: &chapbook_reader::chapbook_opds::Entry) -> (bool, bool) {
-    #[cfg(feature = "sync")]
-    {
-        let (progression, container) = chapbook_sync::targets_of(entry);
-        (progression.is_some(), container.is_some())
-    }
-    #[cfg(not(feature = "sync"))]
-    {
-        let _ = entry;
-        (false, false)
-    }
-}
-
-/// The sync service hrefs an entry advertises, unresolved — `(None,
-/// None)` in a build without sync, which is how the row flags above
-/// already report it.
-#[cfg(feature = "opds")]
-fn sync_target_hrefs(
-    entry: &chapbook_reader::chapbook_opds::Entry,
-) -> (Option<String>, Option<String>) {
-    #[cfg(feature = "sync")]
-    {
-        chapbook_sync::targets_of(entry)
-    }
-    #[cfg(not(feature = "sync"))]
-    {
-        let _ = entry;
-        (None, None)
-    }
 }
 
 /// Which string an entry accessor should answer with.
@@ -668,6 +621,7 @@ pub unsafe extern "C" fn cb_catalog_entry_text(
                 Ok(entry) => entry,
                 Err(code) => return code,
             };
+            let base = catalog.inner.base();
             let value: Option<String> = match field {
                 cb_entry_field::CB_ENTRY_TITLE => Some(entry.title.clone()),
                 cb_entry_field::CB_ENTRY_SUMMARY => entry.summary.clone(),
@@ -678,35 +632,38 @@ pub unsafe extern "C" fn cb_catalog_entry_text(
                 }
                 cb_entry_field::CB_ENTRY_THUMBNAIL_URL => entry
                     .thumbnail()
-                    .map(|link| resolve_url(&catalog.base, &link.href)),
+                    .map(|link| resolve_url(base, &link.href)),
                 cb_entry_field::CB_ENTRY_COVER_URL => entry
                     .cover()
-                    .map(|link| resolve_url(&catalog.base, &link.href)),
+                    .map(|link| resolve_url(base, &link.href)),
                 cb_entry_field::CB_ENTRY_HREF => entry
                     .acquisitions()
                     .next()
                     .or_else(|| entry.links.first())
-                    .map(|link| resolve_url(&catalog.base, &link.href)),
+                    .map(|link| resolve_url(base, &link.href)),
                 cb_entry_field::CB_ENTRY_ID => Some(entry.id.clone()),
                 cb_entry_field::CB_ENTRY_DOWNLOAD_URL => entry
                     .download_request()
-                    .map(|request| resolve_url(&catalog.base, &request.url)),
+                    .map(|request| resolve_url(base, &request.url)),
                 cb_entry_field::CB_ENTRY_DOWNLOAD_FILENAME => entry
                     .download_request()
                     .map(|request| request.suggested_filename),
                 cb_entry_field::CB_ENTRY_DOWNLOAD_MEDIA_TYPE => {
                     entry.download_request().and_then(|request| request.media_type)
                 }
-                // Resolved even though the parser already did it against
-                // the request URL: it is a no-op on an absolute href, and
-                // it is what stops a root-relative service path — which
-                // real catalogs do serve — reaching the library as a path.
-                cb_entry_field::CB_ENTRY_PROGRESSION_URL => sync_target_hrefs(entry)
-                    .0
-                    .map(|href| resolve_url(&catalog.base, &href)),
-                cb_entry_field::CB_ENTRY_ANNOTATION_CONTAINER => sync_target_hrefs(entry)
-                    .1
-                    .map(|href| resolve_url(&catalog.base, &href)),
+                // Resolved by the application layer, even though the
+                // parser already did it against the request URL: a no-op
+                // on an absolute href, and what stops a root-relative
+                // service path — which real catalogs do serve — reaching
+                // the library as a path.
+                cb_entry_field::CB_ENTRY_PROGRESSION_URL => catalog
+                    .inner
+                    .download(index)
+                    .and_then(|download| download.progression_url),
+                cb_entry_field::CB_ENTRY_ANNOTATION_CONTAINER => catalog
+                    .inner
+                    .download(index)
+                    .and_then(|download| download.annotation_container),
             };
             let Some(value) = value else {
                 return fail(
@@ -773,17 +730,8 @@ pub unsafe extern "C" fn cb_catalog_facet_count(
 /// The feed's facets, flattened with their group index — the same
 /// flattening the contents use, and for the same reason.
 #[cfg(feature = "opds")]
-fn facets(catalog: &cb_catalog) -> Vec<(usize, String, chapbook_reader::chapbook_opds::Link)> {
-    let Some(feed) = &catalog.feed else {
-        return Vec::new();
-    };
-    let mut out = Vec::new();
-    for (group_index, (group_name, links)) in feed.facet_groups().into_iter().enumerate() {
-        for link in links {
-            out.push((group_index, group_name.clone(), link.clone()));
-        }
-    }
-    out
+fn facets(catalog: &cb_catalog) -> Vec<chapbook_app::Facet> {
+    catalog.inner.facets()
 }
 
 /// One facet's plain data.
@@ -801,17 +749,17 @@ pub unsafe extern "C" fn cb_catalog_facet(
                 return fail(cb_status::CB_ERR_NULL_ARGUMENT, "out is null");
             }
             let all = facets(catalog);
-            let Some((group, _, link)) = all.get(index) else {
+            let Some(facet) = all.get(index) else {
                 return fail(
                     cb_status::CB_ERR_INVALID_ARGUMENT,
                     format!("facet index {index} out of {}", all.len()),
                 );
             };
             let filled = cb_facet {
-                group: *group,
-                active: link.active_facet,
-                count: link.count.unwrap_or(0),
-                has_count: link.count.is_some(),
+                group: facet.group_index,
+                active: facet.active,
+                count: facet.count.unwrap_or(0),
+                has_count: facet.count.is_some(),
             };
             // SAFETY: checked non-null above.
             unsafe { *out = filled };
@@ -844,20 +792,19 @@ pub unsafe extern "C" fn cb_catalog_facet_text(
 ) -> cb_status {
     guard(cb_status::CB_ERR_PANIC, || {
         with_opds!((catalog, index, field, buf, cap, needed) {
-            use chapbook_reader::chapbook_opds::resolve_url;
             clear_last_error();
             let catalog = catalog_ref!(catalog);
             let all = facets(catalog);
-            let Some((_, group, link)) = all.get(index) else {
+            let Some(facet) = all.get(index) else {
                 return fail(
                     cb_status::CB_ERR_INVALID_ARGUMENT,
                     format!("facet index {index} out of {}", all.len()),
                 );
             };
             let value = match field {
-                cb_facet_field::CB_FACET_LABEL => link.title.clone().unwrap_or_default(),
-                cb_facet_field::CB_FACET_GROUP => group.clone(),
-                cb_facet_field::CB_FACET_HREF => resolve_url(&catalog.base, &link.href),
+                cb_facet_field::CB_FACET_LABEL => facet.label.clone(),
+                cb_facet_field::CB_FACET_GROUP => facet.group.clone(),
+                cb_facet_field::CB_FACET_HREF => facet.href.clone(),
             };
             // SAFETY: the header's contract for the buffer triple.
             unsafe { str_out(&value, buf, cap, needed) }
@@ -878,20 +825,18 @@ pub unsafe extern "C" fn cb_catalog_page_href(
 ) -> cb_status {
     guard(cb_status::CB_ERR_PANIC, || {
         with_opds!((catalog, direction, buf, cap, needed) {
-            use chapbook_reader::chapbook_opds::resolve_url;
             clear_last_error();
             let catalog = catalog_ref!(catalog);
-            let Some(feed) = &catalog.feed else {
+            if catalog.inner.feed().is_none() {
                 return fail(cb_status::CB_ERR_UNAVAILABLE, "nothing has been fetched yet");
+            }
+            let url = match direction {
+                cb_catalog_page::CB_PAGE_NEXT => catalog.inner.next_page(),
+                cb_catalog_page::CB_PAGE_PREVIOUS => catalog.inner.previous_page(),
             };
-            let link = match direction {
-                cb_catalog_page::CB_PAGE_NEXT => feed.next(),
-                cb_catalog_page::CB_PAGE_PREVIOUS => feed.previous(),
-            };
-            let Some(link) = link else {
+            let Some(url) = url else {
                 return fail(cb_status::CB_ERR_UNAVAILABLE, "no page that way");
             };
-            let url = resolve_url(&catalog.base, &link.href);
             // SAFETY: the header's contract for the buffer triple.
             unsafe { str_out(&url, buf, cap, needed) }
         })
@@ -912,10 +857,7 @@ pub unsafe extern "C" fn cb_catalog_has_search(
             if has.is_null() {
                 return fail(cb_status::CB_ERR_NULL_ARGUMENT, "has out-pointer is null");
             }
-            let offered = catalog
-                .feed
-                .as_ref()
-                .is_some_and(|feed| feed.search().is_some());
+            let offered = catalog.inner.has_search();
             // SAFETY: checked non-null just above.
             unsafe { *has = offered };
             cb_status::CB_OK
@@ -975,8 +917,6 @@ pub unsafe extern "C" fn cb_catalog_download(
             }
             #[cfg(feature = "library")]
             {
-                use chapbook_reader::chapbook_library::Library;
-                use chapbook_reader::chapbook_opds::resolve_url;
                 clear_last_error();
                 let catalog = catalog_mut!(catalog);
                 // SAFETY: the header's contract.
@@ -986,69 +926,22 @@ pub unsafe extern "C" fn cb_catalog_download(
                 if book_id.is_null() {
                     return fail(cb_status::CB_ERR_NULL_ARGUMENT, "book_id out-pointer is null");
                 }
-                let (url, entry) = {
-                    let entry = match entry_at(catalog, index) {
-                        Ok(entry) => entry,
-                        Err(code) => return code,
-                    };
-                    let Some(link) = entry.acquisitions().next() else {
-                        return fail(
-                            cb_status::CB_ERR_UNAVAILABLE,
-                            "this entry has nothing to download",
-                        );
-                    };
-                    (
-                        resolve_url(&catalog.base, &link.href),
-                        entry.clone(),
-                    )
-                };
-
-                // Staging only: the library copies what it imports into
-                // its own books/, so a download kept anywhere else is a
-                // second copy of every book ever added.
-                let staging = std::env::temp_dir()
-                    .join(format!("chapbook-acquire-{}", std::process::id()));
-                if let Err(e) = std::fs::create_dir_all(&staging) {
+                if let Err(code) = entry_at(catalog, index) {
+                    return code;
+                }
+                if catalog.inner.download(index).is_none() {
                     return fail(
-                        cb_status::CB_ERR_IO,
-                        format!("cannot make {}: {e}", staging.display()),
+                        cb_status::CB_ERR_UNAVAILABLE,
+                        "this entry has nothing to download",
                     );
                 }
-                // Named from the index rather than the entry id, which is
-                // opaque and contains slashes on real comic servers.
-                let file = staging.join(format!("entry-{index}"));
-                if let Err(e) = catalog.client.download(&url, &file) {
-                    let _ = std::fs::remove_file(&file);
-                    return opds_failure(catalog, e);
-                }
-
-                let imported = (|| {
-                    let publication = chapbook_reader::open_publication(&file)?;
-                    let mut library = Library::open(std::path::Path::new(dir))?;
-                    let id = library.import(&file, publication.as_ref())?;
-                    // The parser resolved these against the request URL
-                    // already; resolving again is a no-op on an absolute
-                    // one and is here so a service URL can never reach the
-                    // library as a path.
-                    #[cfg(feature = "sync")]
-                    {
-                        let (progression, container) = chapbook_sync::targets_of(&entry);
-                        let progression =
-                            progression.map(|href| resolve_url(&catalog.base, &href));
-                        let container = container.map(|href| resolve_url(&catalog.base, &href));
-                        library.set_sync_targets(
-                            id,
-                            progression.as_deref(),
-                            container.as_deref(),
-                        )?;
-                    }
-                    Ok::<i64, chapbook_reader::chapbook_core::ChapbookError>(id.0)
-                })();
-                let _ = std::fs::remove_file(&file);
-                match imported {
+                match catalog
+                    .inner
+                    .download_to_library(index, std::path::Path::new(dir))
+                {
                     Ok(id) => {
                         // SAFETY: checked non-null above.
-                        unsafe { *book_id = id };
+                        unsafe { *book_id = id.0 };
                         cb_status::CB_OK
                     }
                     Err(e) => crate::error::from_error(&e),
@@ -1075,14 +968,14 @@ pub unsafe extern "C" fn cb_catalog_auth_title(
         with_opds!((catalog, buf, cap, needed) {
             clear_last_error();
             let catalog = catalog_ref!(catalog);
-            let Some(auth) = &catalog.auth else {
+            let Some(title) = catalog.inner.auth_title() else {
                 return fail(
                     cb_status::CB_ERR_UNAVAILABLE,
                     "no authentication document was offered",
                 );
             };
             // SAFETY: the header's contract for the buffer triple.
-            unsafe { str_out(&auth.title, buf, cap, needed) }
+            unsafe { str_out(title, buf, cap, needed) }
         })
     })
 }
@@ -1105,10 +998,7 @@ pub unsafe extern "C" fn cb_catalog_auth_offers_basic(
             if offers.is_null() {
                 return fail(cb_status::CB_ERR_NULL_ARGUMENT, "offers out-pointer is null");
             }
-            let basic = catalog
-                .auth
-                .as_ref()
-                .is_some_and(|auth| auth.basic_flow().is_some());
+            let basic = catalog.inner.auth_offers_basic();
             // SAFETY: checked non-null just above.
             unsafe { *offers = basic };
             cb_status::CB_OK

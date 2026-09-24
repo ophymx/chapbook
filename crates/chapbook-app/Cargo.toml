@@ -22,10 +22,15 @@ mathml = ["chapbook-reader/mathml"]
 # a service. Off, the layer is a shelf, custody and a reader — the profile
 # a device with no radio wants, and the one a browser forces.
 catalog = ["chapbook-reader/opds", "dep:chapbook-opds", "dep:chapbook-sync"]
+# The bundled `ureq` transport, for a platform that supplies none: a
+# desktop process, a test slice. A phone never wants it — it ignores the
+# device's trust store — which is why it is a choice and not the default
+# fallback.
+bundled-http = ["catalog", "chapbook-reader/ureq", "chapbook-opds?/ureq", "chapbook-sync?/ureq"]
 # The desktop's answers to the platform questions: fonts from the host,
-# credentials from the environment, the bundled `ureq` transport, the
-# platform's own library directory. Everything a phone injects instead.
-desktop = ["catalog", "chapbook-reader/ureq", "chapbook-opds?/ureq", "chapbook-sync?/ureq"]
+# credentials from the environment, the bundled transport, the platform's
+# own library directory. Everything a phone injects instead.
+desktop = ["bundled-http"]
 
 [dependencies]
 chapbook-core = { workspace = true }

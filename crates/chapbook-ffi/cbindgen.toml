@@ -28,7 +28,9 @@ prefix = ""
 include = ["cb_status", "cb_capability", "cb_format", "cb_rotation", "cb_theme",
            "cb_book_kind", "cb_settings_scope", "cb_position", "cb_metrics",
            "cb_settings", "cb_action", "cb_action_outcome", "cb_key",
-           "cb_reading_direction", "cb_rect", "cb_text_run", "cb_word_span"]
+           "cb_reading_direction", "cb_rect", "cb_text_run", "cb_word_span",
+           "cb_opened", "cb_progress_label", "cb_place", "cb_saved_catalog_field",
+           "cb_browse_state", "cb_browse_field", "cb_download_outcome"]
 
 [enum]
 prefix_with_name = false

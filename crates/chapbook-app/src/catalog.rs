@@ -122,7 +122,10 @@ pub struct Catalog {
 }
 
 impl Catalog {
-    pub(crate) fn new(
+    /// A catalog over a client and a store. [`App::browse`](crate::App::browse)
+    /// is the ordinary door; this one is for a host that built the client
+    /// itself and has no app to ask.
+    pub fn new(
         client: OpdsClient,
         credentials: Arc<dyn CredentialStore>,
         fallback_title: String,

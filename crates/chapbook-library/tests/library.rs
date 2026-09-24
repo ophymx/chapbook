@@ -1103,7 +1103,9 @@ fn a_grant_is_kept_by_fingerprint_and_forgotten() {
 fn a_preference_round_trips_and_clears() {
     let (mut library, dir) = temp_library();
     assert_eq!(library.preference("progress_label").unwrap(), None);
-    library.set_preference("progress_label", "pages_left").unwrap();
+    library
+        .set_preference("progress_label", "pages_left")
+        .unwrap();
     assert_eq!(
         library.preference("progress_label").unwrap().as_deref(),
         Some("pages_left")

@@ -30,14 +30,14 @@ use chapbook_app::chapbook_reader::chapbook_core::{
     TapZones,
 };
 use chapbook_app::chapbook_reader::{SessionEvent, SettingsScope};
-use chapbook_app::{App, ShelfFilter, SyncStatus};
+use chapbook_app::{App, Opened, ShelfFilter, SyncStatus};
 
 use crate::page_area::{PageArea, SessionSlot};
 
 pub fn run() -> glib::ExitCode {
     // The engine reports through `log`; this shell is the app and may print.
     chapbook_core::log_to_stderr();
-    let model = match App::open(None) {
+    let model = match App::desktop(None) {
         Ok(model) => model,
         Err(e) => {
             eprintln!("chapbook-app-gtk: {e}");
@@ -814,7 +814,19 @@ impl Shell {
         // Bound, not matched on directly — see import_dialog.
         let opened = self.model.borrow().open_book(id);
         let mut session = match opened {
-            Ok(session) => session,
+            Ok(Opened::Session(session)) => *session,
+            // This desktop only imports; a row the platform owns arrived
+            // some other way, and there is no grant here to resolve.
+            Ok(Opened::Adopted { .. }) => {
+                self.set_status(
+                    "open: this book is adopted, and the desktop has no way to reach it",
+                );
+                return;
+            }
+            Ok(Opened::Missing) => {
+                self.set_status("open: the book's file is gone from the library");
+                return;
+            }
             Err(e) => {
                 self.set_status(&format!("open: {e}"));
                 return;

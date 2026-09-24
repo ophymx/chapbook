@@ -121,6 +121,295 @@ typedef enum cb_annotation_kind {
 } cb_annotation_kind;
 
 /**
+ * Which reader opens the bytes. `CB_FORMAT_GUESS` decides from the bytes
+ * themselves, and is the right answer even when a name is available — the
+ * EPUB `mimetype` entry and the `%PDF` header do not lie and an extension
+ * does.
+ */
+enum cb_format
+#if defined(__cplusplus) || __STDC_VERSION__ >= 202311L
+  : uint32_t
+#endif // defined(__cplusplus) || __STDC_VERSION__ >= 202311L
+ {
+    CB_FORMAT_GUESS = 0,
+    CB_FORMAT_EPUB = 1,
+    CB_FORMAT_CBZ = 2,
+    CB_FORMAT_PDF = 3,
+};
+#ifndef __cplusplus
+#if __STDC_VERSION__ >= 202311L
+typedef enum cb_format cb_format;
+#else
+typedef uint32_t cb_format;
+#endif // __STDC_VERSION__ >= 202311L
+#endif // __cplusplus
+
+/**
+ * What opening a shelf row came to.
+ */
+enum cb_opened
+#if defined(__cplusplus) || __STDC_VERSION__ >= 202311L
+  : uint32_t
+#endif // defined(__cplusplus) || __STDC_VERSION__ >= 202311L
+ {
+    /**
+     * The library's own copy, open: `session` is set.
+     */
+    CB_OPENED_SESSION = 0,
+    /**
+     * The platform's file. Read the grant with [`cb_app_grant`] by the
+     * row's fingerprint, resolve it to a descriptor, and open with
+     * [`cb_session_open_fd`](crate::cb_session_open_fd) over
+     * [`cb_app_session_config`]. `session` is null.
+     */
+    CB_OPENED_ADOPTED = 1,
+    /**
+     * Out of reach: the copy is gone from disk, or an adopted book whose
+     * grant was never kept. The row survives; say the file is out of
+     * reach. `session` is null.
+     */
+    CB_OPENED_MISSING = 2,
+};
+#ifndef __cplusplus
+#if __STDC_VERSION__ >= 202311L
+typedef enum cb_opened cb_opened;
+#else
+typedef uint32_t cb_opened;
+#endif // __STDC_VERSION__ >= 202311L
+#endif // __cplusplus
+
+/**
+ * What the reader's progress readout says, beside the whole-book bar.
+ */
+enum cb_progress_label
+#if defined(__cplusplus) || __STDC_VERSION__ >= 202311L
+  : uint32_t
+#endif // defined(__cplusplus) || __STDC_VERSION__ >= 202311L
+ {
+    /**
+     * Percent of the whole book.
+     */
+    CB_PROGRESS_PERCENT = 0,
+    /**
+     * Pages left in this unit.
+     */
+    CB_PROGRESS_PAGES_LEFT = 1,
+    /**
+     * Unit and page, as raw indices.
+     */
+    CB_PROGRESS_CHAPTER_PAGE = 2,
+};
+#ifndef __cplusplus
+#if __STDC_VERSION__ >= 202311L
+typedef enum cb_progress_label cb_progress_label;
+#else
+typedef uint32_t cb_progress_label;
+#endif // __STDC_VERSION__ >= 202311L
+#endif // __cplusplus
+
+/**
+ * Which string a saved catalog accessor answers with.
+ */
+enum cb_saved_catalog_field
+#if defined(__cplusplus) || __STDC_VERSION__ >= 202311L
+  : uint32_t
+#endif // defined(__cplusplus) || __STDC_VERSION__ >= 202311L
+ {
+    /**
+     * What the reader called it, or what its feed did; may be empty.
+     */
+    CB_SAVED_CATALOG_TITLE = 0,
+    /**
+     * Opaque and possibly secret-bearing: never log it.
+     */
+    CB_SAVED_CATALOG_URL = 1,
+};
+#ifndef __cplusplus
+#if __STDC_VERSION__ >= 202311L
+typedef enum cb_saved_catalog_field cb_saved_catalog_field;
+#else
+typedef uint32_t cb_saved_catalog_field;
+#endif // __STDC_VERSION__ >= 202311L
+#endif // __cplusplus
+
+/**
+ * What a catalog screen shows.
+ */
+enum cb_browse_state
+#if defined(__cplusplus) || __STDC_VERSION__ >= 202311L
+  : uint32_t
+#endif // defined(__cplusplus) || __STDC_VERSION__ >= 202311L
+ {
+    /**
+     * Nothing fetched yet.
+     */
+    CB_BROWSE_OPENING = 0,
+    /**
+     * A feed is held; read it through the `cb_catalog_*` accessors.
+     */
+    CB_BROWSE_FEED = 1,
+    /**
+     * A 401 with a login to draw: `CB_BROWSE_LOGIN_TITLE`,
+     * [`cb_catalog_auth_offers_basic`](crate::cb_catalog_auth_offers_basic),
+     * then [`cb_catalog_sign_in`].
+     */
+    CB_BROWSE_LOGIN = 2,
+    /**
+     * The last fetch failed and there is nothing to show;
+     * `CB_BROWSE_FAILURE_URL` and `CB_BROWSE_FAILURE_REASON` say what.
+     */
+    CB_BROWSE_FAILED = 3,
+};
+#ifndef __cplusplus
+#if __STDC_VERSION__ >= 202311L
+typedef enum cb_browse_state cb_browse_state;
+#else
+typedef uint32_t cb_browse_state;
+#endif // __STDC_VERSION__ >= 202311L
+#endif // __cplusplus
+
+/**
+ * Which string [`cb_catalog_browse_text`] answers with.
+ */
+enum cb_browse_field
+#if defined(__cplusplus) || __STDC_VERSION__ >= 202311L
+  : uint32_t
+#endif // defined(__cplusplus) || __STDC_VERSION__ >= 202311L
+ {
+    /**
+     * What goes at the top: the held feed's title, or the saved
+     * catalog's until there is one.
+     */
+    CB_BROWSE_TITLE = 0,
+    /**
+     * The URL the held feed came from.
+     */
+    CB_BROWSE_URL = 1,
+    /**
+     * `CB_BROWSE_LOGIN` only: the catalog's own name for its login.
+     */
+    CB_BROWSE_LOGIN_TITLE = 2,
+    /**
+     * `CB_BROWSE_LOGIN` only: the URL that was refused, which a sign-in
+     * fetches again.
+     */
+    CB_BROWSE_RETRY_URL = 3,
+    /**
+     * `CB_BROWSE_FAILED` only: the URL that failed.
+     */
+    CB_BROWSE_FAILURE_URL = 4,
+    /**
+     * `CB_BROWSE_FAILED` only: why, for a log. The host has its own
+     * sentence for the reader.
+     */
+    CB_BROWSE_FAILURE_REASON = 5,
+};
+#ifndef __cplusplus
+#if __STDC_VERSION__ >= 202311L
+typedef enum cb_browse_field cb_browse_field;
+#else
+typedef uint32_t cb_browse_field;
+#endif // __STDC_VERSION__ >= 202311L
+#endif // __cplusplus
+
+/**
+ * How a platform transfer's HTTP status is read.
+ */
+enum cb_download_outcome
+#if defined(__cplusplus) || __STDC_VERSION__ >= 202311L
+  : uint32_t
+#endif // defined(__cplusplus) || __STDC_VERSION__ >= 202311L
+ {
+    /**
+     * The file is the book. Land it with [`cb_app_land_download`].
+     */
+    CB_DOWNLOAD_LANDED = 0,
+    /**
+     * 401 or 403: the credential the job carried is wrong or gone. Not
+     * worth retrying with the same one; worth a sign-in.
+     */
+    CB_DOWNLOAD_REFUSED = 1,
+    /**
+     * 404, 410, or any other client-side answer: the catalog no longer
+     * offers this. Retrying will not change its mind.
+     */
+    CB_DOWNLOAD_GONE = 2,
+    /**
+     * A 5xx, or no response at all: retry with backoff, which is what a
+     * job system does when told.
+     */
+    CB_DOWNLOAD_AGAIN = 3,
+};
+#ifndef __cplusplus
+#if __STDC_VERSION__ >= 202311L
+typedef enum cb_download_outcome cb_download_outcome;
+#else
+typedef uint32_t cb_download_outcome;
+#endif // __STDC_VERSION__ >= 202311L
+#endif // __cplusplus
+
+/**
+ * What kind of report [`cb_sync_next`] filled in.
+ */
+typedef enum cb_sync_kind {
+    /**
+     * A book reconciled. Failures *inside* the book — an unreachable
+     * service, a refused write — live in the report's position and mark
+     * fields, because one dead host must not read as a dead batch.
+     */
+    CB_SYNC_BOOK = 0,
+    /**
+     * A book did not reconcile at all — removed from the shelf, or no
+     * service to talk to. The rest of the batch still ran.
+     */
+    CB_SYNC_BOOK_FAILED = 1,
+    /**
+     * A batch finished; `books` says how many reports preceded this.
+     * The signal to stop showing a spinner.
+     */
+    CB_SYNC_FINISHED = 2,
+    /**
+     * The batch itself could not start — the library would not answer.
+     * `detail` says why. Only [`cb_app_sync_next`](crate::cb_app_sync_next)
+     * reports it; a worker opened with [`cb_sync_open`] has its library
+     * by then.
+     */
+    CB_SYNC_BROKEN = 3,
+} cb_sync_kind;
+
+/**
+ * What happened to a book's reading position.
+ */
+typedef enum cb_sync_position {
+    /**
+     * Nothing to do: no service, or nothing had changed on either side.
+     */
+    CB_SYNC_POSITION_IDLE = 0,
+    /**
+     * This device's position reached the service.
+     */
+    CB_SYNC_POSITION_PUSHED = 1,
+    /**
+     * The service's position was adopted locally.
+     */
+    CB_SYNC_POSITION_PULLED = 2,
+    /**
+     * The service declined; what it holds is newer. Not a failure — the
+     * next pull brings it down if the local copy is clean by then.
+     */
+    CB_SYNC_POSITION_REFUSED = 3,
+    /**
+     * Both sides moved since they last agreed. Nothing was overwritten.
+     */
+    CB_SYNC_POSITION_CONFLICT = 4,
+    /**
+     * The service could not be reached, or answered something unusable.
+     * Nothing local changed.
+     */
+    CB_SYNC_POSITION_FAILED = 5,
+} cb_sync_position;
+
+/**
  * What an entry is, which decides what tapping it does.
  */
 typedef enum cb_entry_kind {
@@ -563,30 +852,6 @@ typedef int32_t cb_log_level;
 #endif // __cplusplus
 
 /**
- * Which reader opens the bytes. `CB_FORMAT_GUESS` decides from the bytes
- * themselves, and is the right answer even when a name is available — the
- * EPUB `mimetype` entry and the `%PDF` header do not lie and an extension
- * does.
- */
-enum cb_format
-#if defined(__cplusplus) || __STDC_VERSION__ >= 202311L
-  : uint32_t
-#endif // defined(__cplusplus) || __STDC_VERSION__ >= 202311L
- {
-    CB_FORMAT_GUESS = 0,
-    CB_FORMAT_EPUB = 1,
-    CB_FORMAT_CBZ = 2,
-    CB_FORMAT_PDF = 3,
-};
-#ifndef __cplusplus
-#if __STDC_VERSION__ >= 202311L
-typedef enum cb_format cb_format;
-#else
-typedef uint32_t cb_format;
-#endif // __STDC_VERSION__ >= 202311L
-#endif // __cplusplus
-
-/**
  * Quarter-turns clockwise between the page as laid out and the panel it is
  * painted into. A property of the output, not the layout.
  */
@@ -705,60 +970,6 @@ typedef enum cb_session_event_kind {
 } cb_session_event_kind;
 
 /**
- * What kind of report [`cb_sync_next`] filled in.
- */
-typedef enum cb_sync_kind {
-    /**
-     * A book reconciled. Failures *inside* the book — an unreachable
-     * service, a refused write — live in the report's position and mark
-     * fields, because one dead host must not read as a dead batch.
-     */
-    CB_SYNC_BOOK = 0,
-    /**
-     * A book did not reconcile at all — removed from the shelf, or no
-     * service to talk to. The rest of the batch still ran.
-     */
-    CB_SYNC_BOOK_FAILED = 1,
-    /**
-     * A batch finished; `books` says how many reports preceded this.
-     * The signal to stop showing a spinner.
-     */
-    CB_SYNC_FINISHED = 2,
-} cb_sync_kind;
-
-/**
- * What happened to a book's reading position.
- */
-typedef enum cb_sync_position {
-    /**
-     * Nothing to do: no service, or nothing had changed on either side.
-     */
-    CB_SYNC_POSITION_IDLE = 0,
-    /**
-     * This device's position reached the service.
-     */
-    CB_SYNC_POSITION_PUSHED = 1,
-    /**
-     * The service's position was adopted locally.
-     */
-    CB_SYNC_POSITION_PULLED = 2,
-    /**
-     * The service declined; what it holds is newer. Not a failure — the
-     * next pull brings it down if the local copy is clean by then.
-     */
-    CB_SYNC_POSITION_REFUSED = 3,
-    /**
-     * Both sides moved since they last agreed. Nothing was overwritten.
-     */
-    CB_SYNC_POSITION_CONFLICT = 4,
-    /**
-     * The service could not be reached, or answered something unusable.
-     * Nothing local changed.
-     */
-    CB_SYNC_POSITION_FAILED = 5,
-} cb_sync_position;
-
-/**
  * Which optional capabilities this build actually has.
  *
  * A header cannot tell a host which `.so` it loaded, and the Android spike
@@ -810,6 +1021,13 @@ enum cb_capability
      * locally.
      */
     CB_CAP_SYNC = 128,
+    /**
+     * The application layer: `cb_app_*`, `cb_reader_*`, the search walk
+     * and the browse verbs. Without it every one of them declines, and a
+     * host writes its own application over the session and the shelf —
+     * which is what every host did before it existed.
+     */
+    CB_CAP_APP = 256,
 };
 #ifndef __cplusplus
 #if __STDC_VERSION__ >= 202311L
@@ -820,7 +1038,20 @@ typedef uint32_t cb_capability;
 #endif // __cplusplus
 
 /**
- * An open catalog client, holding the last feed it fetched. Opaque.
+ * One running application over one library directory. Opaque.
+ *
+ * Holds a library connection, so it is one thread's at a time and may
+ * move between them; a host keeps it on the thread it keeps the shelf
+ * on. Coexists with any number of sessions, a `cb_library` and a
+ * catalog over the same directory — the database is WAL.
+ */
+typedef struct cb_app cb_app;
+
+/**
+ * An open catalog, holding the last feed it fetched — and, since the
+ * application layer arrived, the crumb trail that led there and the
+ * login it was last refused with; see [`cb_catalog_go`](crate::cb_catalog_go)
+ * and its neighbours in the `app` module. Opaque.
  *
  * Not thread-safe, like every other handle here: it belongs to one
  * thread at a time, and may move between them.
@@ -831,6 +1062,13 @@ typedef struct cb_catalog cb_catalog;
  * A session configuration under construction. Opaque.
  */
 typedef struct cb_config cb_config;
+
+/**
+ * The answer to a credential lookup, under construction. Opaque; the
+ * engine hands one to the get callback and it is dead when the callback
+ * returns. Saying nothing means *missing* — prompt.
+ */
+typedef struct cb_credential_response cb_credential_response;
 
 /**
  * A font source under construction. Opaque: its shape is Rust's.
@@ -852,6 +1090,20 @@ typedef struct cb_http_response cb_http_response;
  * underneath is not shareable at all.
  */
 typedef struct cb_library cb_library;
+
+/**
+ * A search walked one unit at a time on the session's own thread, so
+ * the page stays responsive between steps. Opaque.
+ *
+ * The blocking whole-book `cb_session_search` would want a worker, and a
+ * worker would touch the session while the page draws — the one rule
+ * the engine has. So the walk is a cursor: the host calls
+ * [`cb_search_walk_step`] from its own loop, yielding however its
+ * platform yields between units, and reads the hits so far after each.
+ * It stops itself at a cap past which a results list is a scroll
+ * nobody finishes.
+ */
+typedef struct cb_search_walk cb_search_walk;
 
 /**
  * An open book. Opaque.
@@ -901,6 +1153,184 @@ typedef struct cb_annotation {
      */
     bool has_color;
 } cb_annotation;
+
+/**
+ * Looks up the credential stored under `key`.
+ *
+ * Before returning, call [`cb_credential_response_found`] with the
+ * stored `Authorization` value, [`cb_credential_response_locked`] if
+ * something is stored but cannot be read right now (device locked,
+ * biometrics not satisfied — do not prompt for a new one), or nothing at
+ * all for *missing*. **It may fire on any thread** and must not put up
+ * a dialog: a lookup is a lookup.
+ */
+typedef void (*cb_credential_get_fn)(const char *key,
+                                     struct cb_credential_response *response,
+                                     void *user);
+
+/**
+ * Persists `authorization` under `key`, replacing what was there. Return
+ * `CB_OK`, or any failure code; the layer reports it and carries on
+ * signed in for this session.
+ */
+typedef cb_status (*cb_credential_store_fn)(const char *key, const char *authorization, void *user);
+
+/**
+ * Forgets whatever is under `key`. Nothing there is success.
+ */
+typedef cb_status (*cb_credential_forget_fn)(const char *key, void *user);
+
+/**
+ * Releases whatever `user` points at, once, when the transport is
+ * dropped — the config freed unopened, or the last session holding it
+ * closed. This is what lets a host hand over a reference-counted object
+ * (a Swift class instance, a JNI global ref) without guessing at the
+ * engine's lifetimes.
+ */
+typedef void (*cb_http_finalize_fn)(void *user);
+
+/**
+ * Where the reader is, for the chrome, as one value read after a draw —
+ * which is when a position is authoritative, because a restored
+ * position lands on the first frame rather than at open. The title is
+ * [`cb_session_title`](crate::cb_session_title)'s.
+ */
+typedef struct cb_place {
+    size_t spine;
+    size_t spine_len;
+    size_t page;
+    size_t page_count;
+    /**
+     * Whole-book progress, 0 to 1, spine-weighted the way the engine's
+     * own progression is: each unit a `1/spine_len` slice, the page's
+     * place within it added.
+     */
+    double book_fraction;
+    /**
+     * Pages after this one in the current unit — the pages-left readout.
+     */
+    size_t pages_left;
+    /**
+     * Whether the engine's Back has anywhere to go — what decides
+     * whether a *Return* is drawn.
+     */
+    bool can_go_back;
+} cb_place;
+
+/**
+ * One search hit. Its context travels on
+ * [`cb_session_search_context`].
+ */
+typedef struct cb_search_hit {
+    /**
+     * The unit the match is in.
+     */
+    size_t spine;
+    /**
+     * Locator offset of the match's first character, and just past its
+     * last — the range to hand
+     * [`cb_session_select_range`](crate::cb_session_select_range) after
+     * jumping, which is how a hit gets painted on the page.
+     */
+    uint32_t start;
+    uint32_t end;
+    /**
+     * Char range of the match within the context string, so a results
+     * list can embolden the matched words rather than the whole line.
+     */
+    uint32_t match_start;
+    uint32_t match_end;
+} cb_search_hit;
+
+/**
+ * Called when a background load finishes and there is something new to
+ * show. **Fires on the loader thread**, not the host's UI thread: it must
+ * only hand a token to whatever the host's main loop watches — a pipe, a
+ * run-loop source, `Handler.post`. Attaching a JVM thread or touching UI
+ * from inside it is the shape this comment exists to prevent.
+ */
+typedef void (*cb_wake_fn)(void *user);
+
+/**
+ * One report from the worker. Plain data; the strings are borrowed from
+ * the handle and stay valid until the next [`cb_sync_next`] or
+ * [`cb_sync_close`] — copy them before either.
+ *
+ * Which fields mean anything depends on `kind`: a `CB_SYNC_BOOK` fills
+ * `book`, `position` and the mark counts; `CB_SYNC_BOOK_FAILED` fills
+ * `book` and `detail`; `CB_SYNC_FINISHED` fills `books`. Everything
+ * else is zeroed, so a host may also just read what it prints.
+ */
+typedef struct cb_sync_report {
+    enum cb_sync_kind kind;
+    /**
+     * The library row, [`cb_library_query`](crate::cb_library_query)'s
+     * id space.
+     */
+    int64_t book;
+    enum cb_sync_position position;
+    /**
+     * The refusal or failure being reported — the position's for
+     * `CB_SYNC_BOOK` with a refused or failed position, the book's for
+     * `CB_SYNC_BOOK_FAILED`. Null when there is nothing to explain.
+     */
+    const char *detail;
+    /**
+     * Marks: written to the container as new.
+     */
+    size_t marks_created;
+    /**
+     * Marks: this device's edits written over the container's copy.
+     */
+    size_t marks_updated;
+    /**
+     * Marks: deletes carried out on the container.
+     */
+    size_t marks_deleted;
+    /**
+     * Marks: pulled from the container as marks this device had not
+     * seen.
+     */
+    size_t marks_adopted;
+    /**
+     * Marks: already known here, brought up to date with what another
+     * device wrote.
+     */
+    size_t marks_refreshed;
+    /**
+     * Marks: another device's deletions arriving — taken off this shelf
+     * because a complete container listing no longer holds them.
+     * Distinct from `marks_deleted`, which is this device's own
+     * deletions reaching the container.
+     */
+    size_t marks_withdrawn;
+    /**
+     * Marks: conflicts settled by re-reading the container — both edits
+     * survive, nothing overwritten.
+     */
+    size_t marks_merged;
+    /**
+     * Marks: still owing a write after a merge was attempted. The next
+     * pass tries again.
+     */
+    size_t marks_conflicts;
+    /**
+     * The container had more pages than one pass reads, so the pull saw
+     * a prefix and no deletion was inferred — a mark another device
+     * removed may still be sitting here. Worth saying to the reader,
+     * because it changes what the counts above mean.
+     */
+    bool listing_truncated;
+    /**
+     * The container could not be reached; whatever was pushed before it
+     * failed stands. Null when the mark half ran to the end.
+     */
+    const char *marks_error;
+    /**
+     * `CB_SYNC_FINISHED` only: how many books the batch reported.
+     */
+    size_t books;
+} cb_sync_report;
 
 /**
  * One request header, borrowed for the duration of the callback.
@@ -970,15 +1400,6 @@ typedef void (*cb_http_get_fn)(const struct cb_http_request *request,
                                void *user);
 
 /**
- * Releases whatever `user` points at, once, when the transport is
- * dropped — the config freed unopened, or the last session holding it
- * closed. This is what lets a host hand over a reference-counted object
- * (a Swift class instance, a JNI global ref) without guessing at the
- * engine's lifetimes.
- */
-typedef void (*cb_http_finalize_fn)(void *user);
-
-/**
  * One row of a catalog listing. Strings travel on their own calls.
  */
 typedef struct cb_entry {
@@ -1039,6 +1460,32 @@ typedef struct cb_facet {
     uint64_t count;
     bool has_count;
 } cb_facet;
+
+/**
+ * Performs one blocking request that is not a GET — the write half a
+ * sync transport must have, because reconciling marks means POST, PUT
+ * and DELETE against a Web Annotation container and a position PUT
+ * against a progression service.
+ *
+ * `method` is the verb as an uppercase token: `"POST"`, `"PUT"` or
+ * `"DELETE"` — nothing else is ever sent. `body` is `body_len` bytes to
+ * send, or null when the request has none (a DELETE); it dies when the
+ * callback returns.
+ *
+ * Everything [`cb_http_get_fn`] promises applies here too, plus one
+ * duty of its own: **report the response headers** through
+ * [`cb_http_response_add_header`], at least `ETag` and `Location` when
+ * present. A Web Annotation container carries its whole concurrency
+ * story in `ETag` and says where it put a new mark in `Location`; a
+ * transport that discards them makes safe concurrent editing
+ * impossible, and the failure looks like sync quietly forgetting marks.
+ */
+typedef void (*cb_http_send_fn)(const char *method,
+                                const struct cb_http_request *request,
+                                const uint8_t *body,
+                                size_t body_len,
+                                struct cb_http_response *response,
+                                void *user);
 
 /**
  * What to list, and in what order. Zero-initialize for the whole shelf.
@@ -1180,31 +1627,6 @@ typedef struct cb_toc_entry {
 } cb_toc_entry;
 
 /**
- * One search hit. Its context travels on
- * [`cb_session_search_context`].
- */
-typedef struct cb_search_hit {
-    /**
-     * The unit the match is in.
-     */
-    size_t spine;
-    /**
-     * Locator offset of the match's first character, and just past its
-     * last — the range to hand
-     * [`cb_session_select_range`](crate::cb_session_select_range) after
-     * jumping, which is how a hit gets painted on the page.
-     */
-    uint32_t start;
-    uint32_t end;
-    /**
-     * Char range of the match within the context string, so a results
-     * list can embolden the matched words rather than the whole line.
-     */
-    uint32_t match_start;
-    uint32_t match_end;
-} cb_search_hit;
-
-/**
  * The page box, in logical units, plus the scale that turns it into
  * device pixels. Laying out at logical size and rasterizing at device
  * size is what keeps text a readable size on a dense panel.
@@ -1313,15 +1735,6 @@ typedef struct cb_word_span {
 } cb_word_span;
 
 /**
- * Called when a background load finishes and there is something new to
- * show. **Fires on the loader thread**, not the host's UI thread: it must
- * only hand a token to whatever the host's main loop watches — a pipe, a
- * run-loop source, `Handler.post`. Attaching a JVM thread or touching UI
- * from inside it is the shape this comment exists to prevent.
- */
-typedef void (*cb_wake_fn)(void *user);
-
-/**
  * One session event. Plain data; `message` is borrowed from the session
  * and stays valid until the next [`cb_session_next_event`] or the
  * session closes — copy it before either.
@@ -1342,113 +1755,6 @@ typedef struct cb_session_event {
      */
     const char *message;
 } cb_session_event;
-
-/**
- * Performs one blocking request that is not a GET — the write half a
- * sync transport must have, because reconciling marks means POST, PUT
- * and DELETE against a Web Annotation container and a position PUT
- * against a progression service.
- *
- * `method` is the verb as an uppercase token: `"POST"`, `"PUT"` or
- * `"DELETE"` — nothing else is ever sent. `body` is `body_len` bytes to
- * send, or null when the request has none (a DELETE); it dies when the
- * callback returns.
- *
- * Everything [`cb_http_get_fn`] promises applies here too, plus one
- * duty of its own: **report the response headers** through
- * [`cb_http_response_add_header`], at least `ETag` and `Location` when
- * present. A Web Annotation container carries its whole concurrency
- * story in `ETag` and says where it put a new mark in `Location`; a
- * transport that discards them makes safe concurrent editing
- * impossible, and the failure looks like sync quietly forgetting marks.
- */
-typedef void (*cb_http_send_fn)(const char *method,
-                                const struct cb_http_request *request,
-                                const uint8_t *body,
-                                size_t body_len,
-                                struct cb_http_response *response,
-                                void *user);
-
-/**
- * One report from the worker. Plain data; the strings are borrowed from
- * the handle and stay valid until the next [`cb_sync_next`] or
- * [`cb_sync_close`] — copy them before either.
- *
- * Which fields mean anything depends on `kind`: a `CB_SYNC_BOOK` fills
- * `book`, `position` and the mark counts; `CB_SYNC_BOOK_FAILED` fills
- * `book` and `detail`; `CB_SYNC_FINISHED` fills `books`. Everything
- * else is zeroed, so a host may also just read what it prints.
- */
-typedef struct cb_sync_report {
-    enum cb_sync_kind kind;
-    /**
-     * The library row, [`cb_library_query`](crate::cb_library_query)'s
-     * id space.
-     */
-    int64_t book;
-    enum cb_sync_position position;
-    /**
-     * The refusal or failure being reported — the position's for
-     * `CB_SYNC_BOOK` with a refused or failed position, the book's for
-     * `CB_SYNC_BOOK_FAILED`. Null when there is nothing to explain.
-     */
-    const char *detail;
-    /**
-     * Marks: written to the container as new.
-     */
-    size_t marks_created;
-    /**
-     * Marks: this device's edits written over the container's copy.
-     */
-    size_t marks_updated;
-    /**
-     * Marks: deletes carried out on the container.
-     */
-    size_t marks_deleted;
-    /**
-     * Marks: pulled from the container as marks this device had not
-     * seen.
-     */
-    size_t marks_adopted;
-    /**
-     * Marks: already known here, brought up to date with what another
-     * device wrote.
-     */
-    size_t marks_refreshed;
-    /**
-     * Marks: another device's deletions arriving — taken off this shelf
-     * because a complete container listing no longer holds them.
-     * Distinct from `marks_deleted`, which is this device's own
-     * deletions reaching the container.
-     */
-    size_t marks_withdrawn;
-    /**
-     * Marks: conflicts settled by re-reading the container — both edits
-     * survive, nothing overwritten.
-     */
-    size_t marks_merged;
-    /**
-     * Marks: still owing a write after a merge was attempted. The next
-     * pass tries again.
-     */
-    size_t marks_conflicts;
-    /**
-     * The container had more pages than one pass reads, so the pull saw
-     * a prefix and no deletion was inferred — a mark another device
-     * removed may still be sitting here. Worth saying to the reader,
-     * because it changes what the counts above mean.
-     */
-    bool listing_truncated;
-    /**
-     * The container could not be reached; whatever was pushed before it
-     * failed stands. Null when the mark half ran to the end.
-     */
-    const char *marks_error;
-    /**
-     * `CB_SYNC_FINISHED` only: how many books the batch reported.
-     */
-    size_t books;
-} cb_sync_report;
 
 #ifdef __cplusplus
 extern "C" {
@@ -1549,6 +1855,434 @@ cb_status cb_session_annotation_color(const struct cb_session *session,
                                       char *buf,
                                       size_t cap,
                                       size_t *needed);
+
+/**
+ * The stored value, verbatim: `Basic dXNlcjpwdw==`, `Bearer eyJ...`.
+ */
+cb_status cb_credential_response_found(struct cb_credential_response *response,
+                                       const char *authorization);
+
+/**
+ * Something is stored and cannot be read right now.
+ */
+cb_status cb_credential_response_locked(struct cb_credential_response *response);
+
+/**
+ * The store itself failed. `message` is for a log, never for a reader.
+ */
+cb_status cb_credential_response_fail(struct cb_credential_response *response, const char *message);
+
+/**
+ * Keep secrets in the host's store instead of nowhere.
+ *
+ * `get` is required; `store` and `forget` may be null for a read-only
+ * store, and a sign-in then lasts the session. `user` is handed to every
+ * callback and released by `finalize` exactly once — when the config is
+ * freed unopened, when the last session or app holding the store goes,
+ * or before this call returns a failure. The callbacks may fire on any
+ * thread, the loader's included.
+ *
+ * The key is a string the engine derives and the host stores under
+ * verbatim — `kSecAttrService`, a Keystore alias, a preferences key. Its
+ * shape is [`cb_credential_key`]'s and never a URL: a catalog URL's
+ * path can itself be a secret.
+ */
+cb_status cb_config_set_credential_store(struct cb_config *config,
+                                         cb_credential_get_fn get,
+                                         cb_credential_store_fn store,
+                                         cb_credential_forget_fn forget,
+                                         cb_http_finalize_fn finalize,
+                                         void *user);
+
+/**
+ * The key a credential for `url` lives under: scheme, host and any
+ * explicit port, lower-cased, the path deliberately discarded. What a
+ * host's own code — a cover loader attaching a header, a download job
+ * reading back a token — asks its store for, so it agrees with what the
+ * layer stored. `CB_ERR_UNAVAILABLE` for anything that is not
+ * `scheme://host`.
+ */
+cb_status cb_credential_key(const char *url, char *buf, size_t cap, size_t *needed);
+
+/**
+ * The `Authorization` value for HTTP Basic, from a username and
+ * password — the engine's chore, so no host guesses at the encoding.
+ */
+cb_status cb_basic_authorization(const char *username,
+                                 const char *password,
+                                 char *buf,
+                                 size_t cap,
+                                 size_t *needed);
+
+/**
+ * Open the application. **Consumes `config`** either way.
+ *
+ * The config is the platform: its fonts, its library directory (which
+ * is required here — an app has to persist somewhere), the credential
+ * store from [`cb_config_set_credential_store`] and the transport from
+ * [`cb_config_set_http_transport_full`](crate::cb_config_set_http_transport_full).
+ * Every session the app opens, and every config
+ * [`cb_app_session_config`] hands back, is built from the same answers,
+ * so a host configures its platform once. `device_name` is what a
+ * progression service shows beside this device's position.
+ *
+ * In a build without the application layer (`cb_capabilities()` lacks
+ * `CB_CAP_APP`) this reports `CB_ERR_FORMAT_NOT_BUILT`.
+ */
+cb_status cb_app_open(struct cb_config *config, const char *device_name, struct cb_app **out);
+
+/**
+ * Close the application. Accepts null. Joins the sync driver if one was
+ * started, so a returned close means nothing is still writing to the
+ * library.
+ */
+void cb_app_close(struct cb_app *app);
+
+/**
+ * The configuration every session in this app opens with: the platform
+ * the app was opened on, and the app's library directory. A fresh
+ * handle each call, the caller's to consume with a `cb_session_open_*`
+ * — after adding a cache budget, which is the one thing the app leaves
+ * to the host (see [`cb_reader_cache_budget_for`]). Null in a build
+ * without the application layer.
+ */
+struct cb_config *cb_app_session_config(const struct cb_app *app);
+
+/**
+ * Import: copy a file into the library and answer with its row. The
+ * door for a file the app will never see again — a share, a viewer
+ * intent, a desktop's file dialog.
+ */
+cb_status cb_app_import(struct cb_app *app, const char *path, int64_t *book);
+
+/**
+ * Adopt: record a book the platform owns, from a descriptor, and
+ * remember `grant` as the way to reach it again — a persisted content
+ * URI, a security-scoped bookmark, whatever the host's bytes are. The
+ * library keeps no copy. **Takes ownership of `fd`.**
+ *
+ * Opening is what records the book: a session is opened with the app's
+ * configuration, asked which row it became, and dropped, saving
+ * nothing. The same bytes adopted twice are one row. Unix only, like
+ * [`cb_session_open_fd`](crate::cb_session_open_fd).
+ */
+cb_status cb_app_adopt_fd(struct cb_app *app,
+                          int32_t fd,
+                          cb_format format,
+                          const uint8_t *grant,
+                          size_t grant_len,
+                          int64_t *book);
+
+/**
+ * [`cb_app_adopt_fd`] for a session the host already opened over a
+ * descriptor with [`cb_app_session_config`]: remember `grant` under the
+ * book it reached. `CB_ERR_UNAVAILABLE` for a session that reached no
+ * shelf.
+ */
+cb_status cb_app_adopt(struct cb_app *app,
+                       const struct cb_session *session,
+                       const uint8_t *grant,
+                       size_t grant_len,
+                       int64_t *book);
+
+/**
+ * The grant that reaches an adopted book, by the row's fingerprint
+ * ([`cb_shelf_fingerprint`](crate::cb_shelf_fingerprint)), as the bytes
+ * the host handed over. The two-call idiom, for bytes: `needed` is set
+ * on every path. `CB_ERR_UNAVAILABLE` when none was remembered.
+ */
+cb_status cb_app_grant(const struct cb_app *app,
+                       const char *fingerprint,
+                       uint8_t *buf,
+                       size_t cap,
+                       size_t *needed);
+
+/**
+ * Remember how to reach a book, by fingerprint — for a host that
+ * re-granted a file the row already had.
+ */
+cb_status cb_app_remember_grant(struct cb_app *app,
+                                const char *fingerprint,
+                                const uint8_t *grant,
+                                size_t grant_len);
+
+/**
+ * Forget how to reach a book. Succeeds when nothing was remembered.
+ */
+cb_status cb_app_forget_grant(struct cb_app *app, const char *fingerprint);
+
+/**
+ * Open a shelf row for reading, whichever door it came in through. A
+ * row that has left the shelf is `CB_ERR_LIBRARY`; a book that will not
+ * open is its own error, as it would be from `cb_session_open_path`.
+ */
+cb_status cb_app_open_book(const struct cb_app *app,
+                           int64_t book,
+                           struct cb_session **session,
+                           cb_opened *how);
+
+/**
+ * The reader's chosen readout. Percent until they choose.
+ */
+cb_status cb_app_progress_label(const struct cb_app *app, cb_progress_label *label);
+
+/**
+ * Keep the reader's choice of readout, for every launch after this.
+ */
+cb_status cb_app_set_progress_label(struct cb_app *app, cb_progress_label label);
+
+/**
+ * Read the place off a session. Lays the current unit out if nothing
+ * has yet, which is why it takes the session mutably.
+ */
+cb_status cb_reader_place(struct cb_session *session, struct cb_place *out);
+
+/**
+ * How much of what the platform says this process may use goes to a
+ * session's page cache: a quarter of `available_bytes`, between a floor
+ * below which a page-back rereads the chapter and a cap above which a
+ * phone holds chapters nobody will page back to. The number is the
+ * platform's — `ActivityManager.memoryClass`,
+ * `os_proc_available_memory`, a fixed figure on a device with no such
+ * callback — and the policy is the same for all of them. Hand the
+ * answer to `cb_config_set_cache_budget`.
+ */
+size_t cb_reader_cache_budget_for(uint64_t available_bytes);
+
+/**
+ * What a memory warning does to a session: halve its budget, which
+ * evicts at once, and release its caches. Halving keeps the next
+ * warning from finding the same cache; the floor keeps the page on
+ * screen. `budget` receives the budget now in force.
+ */
+cb_status cb_reader_after_memory_warning(struct cb_session *session, size_t *budget);
+
+/**
+ * Jump to a hit and leave it selected, so the eye finds it — what a
+ * results row does when tapped. `moved` receives whether the position
+ * changed.
+ */
+cb_status cb_reader_show_hit(struct cb_session *session,
+                             const struct cb_search_hit *hit,
+                             bool *moved);
+
+/**
+ * The selection becomes a highlight, and the selection goes.
+ * `CB_ERR_UNAVAILABLE` when nothing is selected.
+ */
+cb_status cb_reader_highlight_selection(struct cb_session *session, int64_t *id);
+
+/**
+ * The selection becomes a note with `body`, and the selection goes.
+ * `CB_ERR_UNAVAILABLE` when nothing is selected.
+ */
+cb_status cb_reader_note_on_selection(struct cb_session *session, const char *body, int64_t *id);
+
+/**
+ * Begin a search. `CB_ERR_INVALID_ARGUMENT` for a query that is only
+ * whitespace, which clears rather than searches.
+ */
+cb_status cb_search_walk_open(const char *query, struct cb_search_walk **out);
+
+/**
+ * Search the next unit of `session`. `more` receives whether there is
+ * another to search: false once the last unit is searched or the cap is
+ * reached, and on every call after.
+ */
+cb_status cb_search_walk_step(struct cb_search_walk *walk, struct cb_session *session, bool *more);
+
+/**
+ * How many hits the walk has found so far.
+ */
+cb_status cb_search_walk_hit_count(const struct cb_search_walk *walk, size_t *count);
+
+/**
+ * One hit's plain data, by index into the hits so far.
+ */
+cb_status cb_search_walk_hit(const struct cb_search_walk *walk,
+                             size_t index,
+                             struct cb_search_hit *out);
+
+/**
+ * A hit's context: the match with a little text either side, for a
+ * results row.
+ */
+cb_status cb_search_walk_context(const struct cb_search_walk *walk,
+                                 size_t index,
+                                 char *buf,
+                                 size_t cap,
+                                 size_t *needed);
+
+/**
+ * Close a walk. Accepts null.
+ */
+void cb_search_walk_close(struct cb_search_walk *walk);
+
+/**
+ * How many catalogs the reader has added.
+ */
+cb_status cb_app_catalog_count(const struct cb_app *app, size_t *count);
+
+/**
+ * The id of the saved catalog at `index`, in the order they were added
+ * — the key for [`cb_app_browse`], [`cb_app_rename_catalog`] and
+ * [`cb_app_remove_catalog`].
+ */
+cb_status cb_app_catalog_id(const struct cb_app *app, size_t index, int64_t *id);
+
+/**
+ * One of a saved catalog's strings, by index.
+ */
+cb_status cb_app_catalog_text(const struct cb_app *app,
+                              size_t index,
+                              cb_saved_catalog_field field,
+                              char *buf,
+                              size_t cap,
+                              size_t *needed);
+
+/**
+ * Add a catalog. `title` may be empty until its feed says what it is
+ * called. Surrounding whitespace on either is dropped.
+ */
+cb_status cb_app_add_catalog(struct cb_app *app, const char *url, const char *title, int64_t *id);
+
+/**
+ * Give a saved catalog a title. `CB_ERR_UNAVAILABLE` for an id that
+ * has been removed.
+ */
+cb_status cb_app_rename_catalog(struct cb_app *app, int64_t id, const char *title);
+
+/**
+ * Take a catalog off the list. Its books stay on the shelf, and its
+ * credential stays in the store — keyed by origin, it may serve another
+ * catalog on the same host. `CB_ERR_UNAVAILABLE` when already gone.
+ */
+cb_status cb_app_remove_catalog(struct cb_app *app, int64_t id);
+
+/**
+ * Browse a catalog: a [`cb_catalog`](crate::cb_catalog) over the app's
+ * transport and credential store, titled after the saved row `catalog`
+ * until its feed says otherwise, or over no row at all when `catalog`
+ * is zero — a URL the reader pasted. Every accessor in the catalog
+ * module reads it; the verbs below drive it.
+ *
+ * The handle is the caller's to close with `cb_catalog_close` and, like
+ * every catalog, one thread's at a time — the thread that does the
+ * blocking fetches. It does not need the app to stay open.
+ */
+cb_status cb_app_browse(const struct cb_app *app, int64_t catalog, struct cb_catalog **out);
+
+/**
+ * Open a feed the reader chose — the root, a navigation row's href, a
+ * facet — pushing a crumb [`cb_catalog_back`] returns to. The state
+ * follows whatever happens; the status says which: `CB_OK` for a feed,
+ * `CB_ERR_AUTH_REQUIRED` for a login, the fetch's own code for a
+ * failure. Blocking.
+ */
+cb_status cb_catalog_go(struct cb_catalog *catalog, const char *url);
+
+/**
+ * Back, inside the catalog: fetch the previous crumb again. `stayed`
+ * receives false at the root, which is the cue to leave the screen.
+ * Blocking when it stays.
+ */
+cb_status cb_catalog_back(struct cb_catalog *catalog, bool *stayed);
+
+/**
+ * Fetch the next page and append its rows to the held feed, for an
+ * infinite scroll. `appended` receives false when there is no next
+ * page. On failure the held feed is untouched and the state stays a
+ * feed: a page that did not arrive is a row that did not appear, not a
+ * screen that failed. Blocking.
+ */
+cb_status cb_catalog_load_more(struct cb_catalog *catalog, bool *appended);
+
+/**
+ * Narrow by a facet of the held feed, by index into
+ * [`cb_catalog_facet`](crate::cb_catalog_facet)'s list — a fetch that
+ * pushes a crumb, like [`cb_catalog_go`]. Blocking.
+ */
+cb_status cb_catalog_apply_facet(struct cb_catalog *catalog, size_t index);
+
+/**
+ * Sign in to the catalog that refused: store the credential by the
+ * refused URL's origin — through the app's credential store, never by
+ * the URL — and fetch it again without moving a crumb. A store that
+ * cannot keep it still signs this session in. `CB_ERR_UNAVAILABLE` when
+ * the state is not `CB_BROWSE_LOGIN`. Blocking.
+ */
+cb_status cb_catalog_sign_in(struct cb_catalog *catalog,
+                             const char *username,
+                             const char *password);
+
+/**
+ * What the screen shows now.
+ */
+cb_status cb_catalog_state(const struct cb_catalog *catalog, cb_browse_state *state);
+
+/**
+ * One of the browse strings. `CB_ERR_UNAVAILABLE` for a field the
+ * current state does not carry.
+ */
+cb_status cb_catalog_browse_text(const struct cb_catalog *catalog,
+                                 cb_browse_field field,
+                                 char *buf,
+                                 size_t cap,
+                                 size_t *needed);
+
+/**
+ * Read a transfer's status the way every front end reads it. Zero — no
+ * response — is `CB_DOWNLOAD_AGAIN`: a transfer that never reached the
+ * service is a network condition, not a verdict.
+ */
+cb_download_outcome cb_download_outcome_of_status(uint16_t status);
+
+/**
+ * Everything a landed download does: import the file the platform's
+ * transfer produced and record the sync services the catalog entry
+ * advertised — `CB_ENTRY_PROGRESSION_URL` and
+ * `CB_ENTRY_ANNOTATION_CONTAINER`, read before the transfer, either or
+ * both null. The file is the caller's and is left where it was.
+ * Landing the same bytes twice answers with the row they already have,
+ * so a retried job needs no bookkeeping of its own.
+ */
+cb_status cb_app_land_download(struct cb_app *app,
+                               const char *file,
+                               const char *progression_url,
+                               const char *annotation_container,
+                               int64_t *book);
+
+/**
+ * Ask for every book with a service to reconcile, starting the app's
+ * sync driver on first use. `started` receives false — and nothing is
+ * asked — when no book on the shelf has a service, which is a fact to
+ * tell the reader rather than a spinner to show them.
+ *
+ * The driver reconciles over the app's transport, authorizing each book
+ * from the app's credential store by the origin of its service, and
+ * speaks as the device named at `cb_app_open`, under an identity minted
+ * once and kept beside the library. `wake` follows
+ * [`cb_session_set_waker`](crate::cb_session_set_waker)'s contract: it
+ * fires on the driver's thread, once per report, and must only nudge
+ * the host to come call [`cb_app_sync_next`]. The wake given the first
+ * time the driver starts is the one it keeps.
+ */
+cb_status cb_app_sync_all(struct cb_app *app, cb_wake_fn wake, void *wake_user, bool *started);
+
+/**
+ * Ask for one book to reconcile. A book with no service reports
+ * `CB_SYNC_BOOK_FAILED` rather than being silently skipped.
+ */
+cb_status cb_app_sync_book(struct cb_app *app, int64_t book, cb_wake_fn wake, void *wake_user);
+
+/**
+ * Take the next sync report, oldest first, on
+ * [`cb_sync_next`](crate::cb_sync_next)'s terms: `CB_ERR_UNAVAILABLE`
+ * when none is waiting, strings valid until the next call. One kind
+ * more than a worker reports: `CB_SYNC_BROKEN`, a batch that could not
+ * start, with `detail` saying why.
+ */
+cb_status cb_app_sync_next(struct cb_app *app, struct cb_sync_report *out);
 
 /**
  * Open a catalog client.
@@ -1930,6 +2664,23 @@ cb_status cb_config_set_http_transport(struct cb_config *config,
                                        cb_http_get_fn get,
                                        cb_http_finalize_fn finalize,
                                        void *user);
+
+/**
+ * Fetch *and write* through the host's networking: the transport a sync
+ * driver needs, installed on a config so that
+ * [`cb_app_open`](crate::cb_app_open) can take it from there.
+ *
+ * Everything [`cb_config_set_http_transport`] says holds, and `send`
+ * carries the write half — POST, PUT and DELETE against a book's
+ * services — under [`cb_http_send_fn`]'s contract. `send` may be null,
+ * in which case the transport reads and every write reports that it
+ * cannot; a host with no sync to run loses nothing by leaving it so.
+ */
+cb_status cb_config_set_http_transport_full(struct cb_config *config,
+                                            cb_http_get_fn get,
+                                            cb_http_send_fn send,
+                                            cb_http_finalize_fn finalize,
+                                            void *user);
 
 /**
  * Which edge the open book reads from.

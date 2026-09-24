@@ -597,6 +597,7 @@ name = "chapbook-ffi"
 version = "0.1.0"
 dependencies = [
  "cbindgen",
+ "chapbook-app",
  "chapbook-reader",
  "chapbook-sync",
  "log",
@@ -607,6 +608,7 @@ name = "chapbook-jni"
 version = "0.1.0"
 dependencies = [
  "android_logger",
+ "chapbook-app",
  "chapbook-reader",
  "chapbook-sync",
  "jni 0.21.1",

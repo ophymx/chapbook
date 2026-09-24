@@ -29,6 +29,10 @@ chapbook-reader = { workspace = true, features = ["library", "cbz", "pdf", "opds
 # network security config. The transport comes from Kotlin, over the
 # platform's own networking — which is also the C ABI's answer.
 chapbook-sync = { workspace = true }
+# The application policy layer, in the phone's profile: catalogs and
+# sync over the Kotlin transport, no bundled HTTP, no desktop answers.
+# What the app module used to write for itself in Kotlin.
+chapbook-app = { workspace = true, features = ["catalog", "cbz", "pdf", "svg", "mathml"] }
 
 [target.'cfg(target_os = "android")'.dependencies]
 jni = "0.21"

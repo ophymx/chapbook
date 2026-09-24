@@ -456,9 +456,9 @@ fn saved_catalogs_are_kept_in_order_renamed_and_removed() {
     assert!(app.catalog(b.id).expect("get").is_none());
 }
 
-/// Only a build without the desktop's bundled transport can prove this;
-/// with it, a missing platform transport falls through to `ureq`.
-#[cfg(not(feature = "desktop"))]
+/// Only a build without the bundled transport can prove this; with it, a
+/// missing platform transport falls through to `ureq`.
+#[cfg(not(feature = "bundled-http"))]
 #[test]
 fn a_phone_with_no_transport_cannot_browse_and_says_so() {
     let dir = TempDir::new("no-transport");

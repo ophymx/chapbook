@@ -42,8 +42,17 @@ use crate::session::cb_wake_fn;
 use crate::error::clear_last_error;
 #[cfg(feature = "sync")]
 use std::collections::VecDeque;
-#[cfg(feature = "sync")]
+#[cfg(any(feature = "sync", feature = "opds"))]
 use std::ffi::CString;
+
+// The report marshalling serves two drivers: the worker this module
+// opens, and the application layer's. Either build has the sync crate
+// in reach — directly, or through the app crate — and the types are one
+// crate's either way.
+#[cfg(all(not(feature = "sync"), feature = "opds"))]
+use chapbook_app::chapbook_sync as sync_types;
+#[cfg(feature = "sync")]
+use chapbook_sync as sync_types;
 
 /// A sync worker over one library. Opaque.
 ///
@@ -76,6 +85,11 @@ pub enum cb_sync_kind {
     /// A batch finished; `books` says how many reports preceded this.
     /// The signal to stop showing a spinner.
     CB_SYNC_FINISHED = 2,
+    /// The batch itself could not start — the library would not answer.
+    /// `detail` says why. Only [`cb_app_sync_next`](crate::cb_app_sync_next)
+    /// reports it; a worker opened with [`cb_sync_open`] has its library
+    /// by then.
+    CB_SYNC_BROKEN = 3,
 }
 
 /// What happened to a book's reading position.
@@ -224,13 +238,11 @@ pub unsafe extern "C" fn cb_sync_open(
             };
 
             let transport: std::sync::Arc<dyn HttpClient> = match (get, send) {
-                (Some(get), Some(send)) => std::sync::Arc::new(transport::SyncTransport {
-                    inner: crate::http::host::HostTransport {
-                        get,
-                        finalize,
-                        user: transport_user as usize,
-                    },
-                    send,
+                (Some(get), Some(send)) => std::sync::Arc::new(crate::http::host::HostTransport {
+                    get,
+                    send: Some(send),
+                    finalize,
+                    user: transport_user as usize,
                 }),
                 (Some(_), None) => {
                     return decline(
@@ -392,8 +404,6 @@ pub unsafe extern "C" fn cb_sync_next(sync: *mut cb_sync, out: *mut cb_sync_repo
     guard(cb_status::CB_ERR_PANIC, || {
         #[cfg(feature = "sync")]
         {
-            use chapbook_sync::{PositionReport, SyncEvent};
-
             clear_last_error();
             // SAFETY: a handle from `cb_sync_open`, not yet closed.
             let Some(sync) = (unsafe { sync.as_mut() }) else {
@@ -411,73 +421,7 @@ pub unsafe extern "C" fn cb_sync_next(sync: *mut cb_sync, out: *mut cb_sync_repo
 
             // The strings the previous report borrowed die here, which is
             // the documented lifetime.
-            sync.strings.clear();
-            let mut keep = |text: &str| -> *const c_char {
-                let owned = CString::new(text.replace('\0', " ")).expect("NULs were just replaced");
-                let ptr = owned.as_ptr();
-                sync.strings.push(owned);
-                ptr
-            };
-
-            let mut report = cb_sync_report {
-                kind: cb_sync_kind::CB_SYNC_FINISHED,
-                book: 0,
-                position: cb_sync_position::CB_SYNC_POSITION_IDLE,
-                detail: std::ptr::null(),
-                marks_created: 0,
-                marks_updated: 0,
-                marks_deleted: 0,
-                marks_adopted: 0,
-                marks_refreshed: 0,
-                marks_withdrawn: 0,
-                marks_merged: 0,
-                marks_conflicts: 0,
-                listing_truncated: false,
-                marks_error: std::ptr::null(),
-                books: 0,
-            };
-            match event {
-                SyncEvent::Book(book) => {
-                    report.kind = cb_sync_kind::CB_SYNC_BOOK;
-                    report.book = book.book.0;
-                    report.position = match &book.position {
-                        PositionReport::Idle => cb_sync_position::CB_SYNC_POSITION_IDLE,
-                        PositionReport::Pushed => cb_sync_position::CB_SYNC_POSITION_PUSHED,
-                        PositionReport::Pulled => cb_sync_position::CB_SYNC_POSITION_PULLED,
-                        PositionReport::Refused(why) => {
-                            report.detail = keep(why);
-                            cb_sync_position::CB_SYNC_POSITION_REFUSED
-                        }
-                        PositionReport::Conflict => cb_sync_position::CB_SYNC_POSITION_CONFLICT,
-                        PositionReport::Failed(why) => {
-                            report.detail = keep(why);
-                            cb_sync_position::CB_SYNC_POSITION_FAILED
-                        }
-                    };
-                    let marks = &book.annotations;
-                    report.marks_created = marks.created;
-                    report.marks_updated = marks.updated;
-                    report.marks_deleted = marks.deleted;
-                    report.marks_adopted = marks.adopted;
-                    report.marks_refreshed = marks.refreshed;
-                    report.marks_withdrawn = marks.withdrawn;
-                    report.marks_merged = marks.merged;
-                    report.marks_conflicts = marks.conflicts;
-                    report.listing_truncated = marks.truncated;
-                    if let Some(why) = &marks.failed {
-                        report.marks_error = keep(why);
-                    }
-                }
-                SyncEvent::Failed { book, reason } => {
-                    report.kind = cb_sync_kind::CB_SYNC_BOOK_FAILED;
-                    report.book = book.0;
-                    report.detail = keep(&reason);
-                }
-                SyncEvent::Finished { books } => {
-                    report.kind = cb_sync_kind::CB_SYNC_FINISHED;
-                    report.books = books;
-                }
-            }
+            let report = report_of(event, &mut sync.strings);
             // SAFETY: checked non-null above.
             unsafe { *out = report };
             cb_status::CB_OK
@@ -491,6 +435,96 @@ pub unsafe extern "C" fn cb_sync_next(sync: *mut cb_sync, out: *mut cb_sync_repo
             )
         }
     })
+}
+
+/// A report with nothing in it, every field zeroed and every string
+/// null, for the caller to fill what its kind means.
+#[cfg(any(feature = "sync", feature = "opds"))]
+pub(crate) fn blank_report() -> cb_sync_report {
+    cb_sync_report {
+        kind: cb_sync_kind::CB_SYNC_FINISHED,
+        book: 0,
+        position: cb_sync_position::CB_SYNC_POSITION_IDLE,
+        detail: std::ptr::null(),
+        marks_created: 0,
+        marks_updated: 0,
+        marks_deleted: 0,
+        marks_adopted: 0,
+        marks_refreshed: 0,
+        marks_withdrawn: 0,
+        marks_merged: 0,
+        marks_conflicts: 0,
+        listing_truncated: false,
+        marks_error: std::ptr::null(),
+        books: 0,
+    }
+}
+
+/// Keep a string for a report to borrow, NUL-free and NUL-terminated,
+/// for as long as `strings` holds it.
+#[cfg(any(feature = "sync", feature = "opds"))]
+pub(crate) fn keep(strings: &mut Vec<CString>, text: &str) -> *const c_char {
+    let owned = CString::new(text.replace('\0', " ")).expect("NULs were just replaced");
+    let ptr = owned.as_ptr();
+    strings.push(owned);
+    ptr
+}
+
+/// One worker event as the report a host reads, its strings kept in
+/// `strings` — which the caller clears first, since that is what bounds
+/// the previous report's lifetime.
+#[cfg(any(feature = "sync", feature = "opds"))]
+pub(crate) fn report_of(
+    event: sync_types::SyncEvent,
+    strings: &mut Vec<CString>,
+) -> cb_sync_report {
+    use sync_types::{PositionReport, SyncEvent};
+
+    strings.clear();
+    let mut report = blank_report();
+    match event {
+        SyncEvent::Book(book) => {
+            report.kind = cb_sync_kind::CB_SYNC_BOOK;
+            report.book = book.book.0;
+            report.position = match &book.position {
+                PositionReport::Idle => cb_sync_position::CB_SYNC_POSITION_IDLE,
+                PositionReport::Pushed => cb_sync_position::CB_SYNC_POSITION_PUSHED,
+                PositionReport::Pulled => cb_sync_position::CB_SYNC_POSITION_PULLED,
+                PositionReport::Refused(why) => {
+                    report.detail = keep(strings, why);
+                    cb_sync_position::CB_SYNC_POSITION_REFUSED
+                }
+                PositionReport::Conflict => cb_sync_position::CB_SYNC_POSITION_CONFLICT,
+                PositionReport::Failed(why) => {
+                    report.detail = keep(strings, why);
+                    cb_sync_position::CB_SYNC_POSITION_FAILED
+                }
+            };
+            let marks = &book.annotations;
+            report.marks_created = marks.created;
+            report.marks_updated = marks.updated;
+            report.marks_deleted = marks.deleted;
+            report.marks_adopted = marks.adopted;
+            report.marks_refreshed = marks.refreshed;
+            report.marks_withdrawn = marks.withdrawn;
+            report.marks_merged = marks.merged;
+            report.marks_conflicts = marks.conflicts;
+            report.listing_truncated = marks.truncated;
+            if let Some(why) = &marks.failed {
+                report.marks_error = keep(strings, why);
+            }
+        }
+        SyncEvent::Failed { book, reason } => {
+            report.kind = cb_sync_kind::CB_SYNC_BOOK_FAILED;
+            report.book = book.0;
+            report.detail = keep(strings, &reason);
+        }
+        SyncEvent::Finished { books } => {
+            report.kind = cb_sync_kind::CB_SYNC_FINISHED;
+            report.books = books;
+        }
+    }
+    report
 }
 
 /// Close the worker. Accepts null.
@@ -508,66 +542,4 @@ pub unsafe extern "C" fn cb_sync_close(sync: *mut cb_sync) {
             drop(unsafe { Box::from_raw(sync) });
         }
     })
-}
-
-/// The write-capable transport a sync worker drives.
-#[cfg(feature = "sync")]
-mod transport {
-    use std::ffi::CString;
-
-    use chapbook_reader::{HttpClient, HttpError, HttpRequest, HttpResponse};
-    use chapbook_sync::HttpMethod;
-
-    use crate::http::host::{with_c_request, HostTransport};
-
-    pub(super) struct SyncTransport {
-        /// Carries `get`, the finalizer and the host pointer; its `Drop`
-        /// is what runs `finalize` exactly once.
-        pub inner: HostTransport,
-        pub send: unsafe extern "C" fn(
-            *const std::ffi::c_char,
-            *const crate::http::cb_http_request,
-            *const u8,
-            usize,
-            *mut crate::http::cb_http_response,
-            *mut std::ffi::c_void,
-        ),
-    }
-
-    impl HttpClient for SyncTransport {
-        fn get(&self, request: HttpRequest) -> Result<HttpResponse, HttpError> {
-            self.inner.get(request)
-        }
-
-        fn send(
-            &self,
-            method: HttpMethod,
-            request: HttpRequest,
-            body: Option<Vec<u8>>,
-        ) -> Result<HttpResponse, HttpError> {
-            let method = CString::new(method.as_str()).expect("method tokens contain no NUL");
-            let mut response = crate::http::cb_http_response::default();
-            let body = body.unwrap_or_default();
-            let (bytes, len) = if body.is_empty() {
-                (std::ptr::null(), 0)
-            } else {
-                (body.as_ptr(), body.len())
-            };
-            with_c_request(&request, |raw| {
-                // SAFETY: the callback the host installed, with pointers
-                // valid for exactly this call.
-                unsafe {
-                    (self.send)(
-                        method.as_ptr(),
-                        raw,
-                        bytes,
-                        len,
-                        &mut response,
-                        self.inner.user(),
-                    )
-                }
-            })?;
-            response.settle()
-        }
-    }
 }

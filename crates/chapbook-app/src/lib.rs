@@ -105,8 +105,8 @@ pub struct Platform {
     /// file does with that.
     pub credentials: Arc<dyn CredentialStore>,
     /// How bytes are fetched. `None` means the bundled transport, which
-    /// exists only in a `desktop` build; anywhere else it is an error at
-    /// the first fetch rather than a silently wrong trust store.
+    /// exists only in a `bundled-http` build; anywhere else it is an error
+    /// at the first fetch rather than a silently wrong trust store.
     #[cfg(feature = "catalog")]
     pub transport: Option<Arc<dyn HttpClient>>,
     /// What a progression service shows beside this device's position.
@@ -596,11 +596,11 @@ impl App {
         if let Some(transport) = &self.platform.transport {
             return Ok(transport.clone());
         }
-        #[cfg(feature = "desktop")]
+        #[cfg(feature = "bundled-http")]
         {
             Ok(Arc::new(chapbook_opds::UreqHttp::new()))
         }
-        #[cfg(not(feature = "desktop"))]
+        #[cfg(not(feature = "bundled-http"))]
         {
             Err(ChapbookError::Network(
                 "this build bundles no transport; the platform must supply one".into(),
