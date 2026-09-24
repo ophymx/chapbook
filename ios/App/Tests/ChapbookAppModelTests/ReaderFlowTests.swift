@@ -17,7 +17,7 @@ private func reader(_ name: String) async throws -> (ReaderViewModel, Reading, U
     guard case .book(let id) = await app.opener.add(try handed(dir, "book.epub")) else {
         throw TestFailure("not added")
     }
-    let vm = ReaderViewModel(bookID: id, shelf: app.shelf, opener: app.opener)
+    let vm = ReaderViewModel(bookID: id, shelf: app.shelf, opener: app.opener, preferences: app.preferences)
     await settle { if case .opening = vm.state { return false } else { return true } }
     guard case .reading(let reading) = vm.state else {
         throw TestFailure("did not open")
@@ -41,6 +41,28 @@ private func reader(_ name: String) async throws -> (ReaderViewModel, Reading, U
     #expect(vm.settings != nil)
     #expect(vm.marks.isEmpty)
     #expect((try reading.session.cacheBudget()) == ReaderViewModel.memoryBudget())
+}
+
+@Test @MainActor func theWholeBookBarMovesWithTheReaderAndTheReadoutIsAPreference() async throws {
+    let (vm, reading, dir) = try await reader("progress")
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let s = reading.session
+
+    // Spine-weighted: the first page of the first unit is the start,
+    // and a unit further on is a `1/spineLength` slice further along.
+    #expect(vm.place.bookFraction == 0)
+    let units = try s.spineLength()
+    _ = try s.nextUnit()
+    vm.moved(try s.position())
+    #expect(abs(vm.place.bookFraction - 1 / Double(units)) < 0.001)
+    #expect(vm.place.bookFraction <= 1)
+
+    // The readout's words are the shell's preference, kept in defaults.
+    #expect(vm.preferences.progressLabel == .percent)
+    vm.preferences.setProgressLabel(.pagesLeft)
+    #expect(vm.preferences.progressLabel == .pagesLeft)
+    let again = Preferences(defaults: UserDefaults(suiteName: "chapbook-app-test-progress-\(ProcessInfo.processInfo.processIdentifier)")!)
+    #expect(again.progressLabel == .pagesLeft)
 }
 
 @Test @MainActor func aSearchWalksTheBookUnitByUnitAndAHitCanBeShown() async throws {

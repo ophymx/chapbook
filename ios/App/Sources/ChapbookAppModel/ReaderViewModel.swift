@@ -11,6 +11,11 @@ public struct Place: Hashable, Sendable {
     public var spineLength = 0
     public var page = 0
     public var pageCount = 0
+    /// Whole-book progress, 0...1, spine-weighted the way the engine's own
+    /// `book_progression` is: each unit a `1/spineLength` slice, the
+    /// page's place within it added. The shell has every term, so the bar
+    /// needs no new binding call.
+    public var bookFraction = 0.0
     /// Whether the engine's Back has anywhere to go — after a link.
     public var canGoBack = false
 }
@@ -76,6 +81,7 @@ public final class ReaderViewModel: ObservableObject {
     private let bookID: Int64
     private let shelf: Shelf
     private let opener: Opener
+    public let preferences: Preferences
     private var searching: Task<Void, Never>?
     private static let searchCap = 200
 
@@ -84,10 +90,11 @@ public final class ReaderViewModel: ObservableObject {
         return nil
     }
 
-    public init(bookID: Int64, shelf: Shelf, opener: Opener) {
+    public init(bookID: Int64, shelf: Shelf, opener: Opener, preferences: Preferences) {
         self.bookID = bookID
         self.shelf = shelf
         self.opener = opener
+        self.preferences = preferences
         Task { [weak self] in await self?.open() }
     }
 
@@ -143,12 +150,17 @@ public final class ReaderViewModel: ObservableObject {
     /// authoritative.
     public func moved(_ position: Session.Position) {
         guard let session else { return }
+        let spineLength = (try? session.spineLength()) ?? 0
+        let pageCount = (try? session.pageCount()) ?? 0
+        let within = pageCount > 0 ? Double(position.page) / Double(pageCount) : 0
+        let fraction = spineLength > 0 ? (Double(position.spine) + within) / Double(spineLength) : 0
         place = Place(
             title: session.title() ?? "",
             spine: position.spine,
-            spineLength: (try? session.spineLength()) ?? 0,
+            spineLength: spineLength,
             page: position.page,
-            pageCount: (try? session.pageCount()) ?? 0,
+            pageCount: pageCount,
+            bookFraction: min(1, max(0, fraction)),
             canGoBack: (try? session.canGoBack()) ?? false)
         // Settings can change under a page turn — `fontUp` from a pinch
         // — so the sheet's numbers follow the draw too.

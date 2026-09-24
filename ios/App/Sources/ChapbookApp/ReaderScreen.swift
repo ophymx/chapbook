@@ -40,7 +40,9 @@ struct ReaderScreen: View {
 
     init(container: AppContainer, bookID: Int64) {
         _vm = StateObject(
-            wrappedValue: ReaderViewModel(bookID: bookID, shelf: container.shelf, opener: container.opener))
+            wrappedValue: ReaderViewModel(
+                bookID: bookID, shelf: container.shelf, opener: container.opener,
+                preferences: container.preferences))
     }
 
     var body: some View {
@@ -174,14 +176,9 @@ struct ReaderScreen: View {
             if chrome {
                 HStack(spacing: 12) {
                     Button { dismiss() } label: { Image(systemName: "chevron.backward") }
-                    VStack(alignment: .leading, spacing: 2) {
+                    VStack(alignment: .leading, spacing: 4) {
                         Text(vm.place.title).font(.headline).lineLimit(1)
-                        Text(
-                            L(
-                                "reader_progress", vm.place.spine + 1, vm.place.spineLength, vm.place.page + 1,
-                                vm.place.pageCount)
-                        )
-                        .font(.caption)
+                        ProgressReadout(place: vm.place, preferences: vm.preferences)
                     }
                     Spacer()
                     // The engine's Back: where the reader was before the
@@ -216,6 +213,35 @@ struct ReaderScreen: View {
             }
         }
         .animation(.easeInOut(duration: 0.15), value: chrome)
+    }
+}
+
+/// The whole-book bar, and a readout whose words are the reader's choice.
+private struct ProgressReadout: View {
+    let place: Place
+    @ObservedObject var preferences: Preferences
+
+    private var text: String {
+        switch preferences.progressLabel {
+        case .percent:
+            L("progress_percent", Int((place.bookFraction * 100).rounded()))
+        case .pagesLeft:
+            {
+                let left = max(0, place.pageCount - place.page - 1)
+                return left == 0 ? L("progress_last_page") : L("progress_pages_left", left)
+            }()
+        case .chapterPage:
+            L("reader_progress", place.spine + 1, place.spineLength, place.page + 1, place.pageCount)
+        }
+    }
+
+    var body: some View {
+        HStack(spacing: 10) {
+            ProgressView(value: place.bookFraction)
+                .progressViewStyle(.linear)
+                .frame(maxWidth: 160)
+            Text(text).font(.caption).foregroundStyle(.secondary).monospacedDigit()
+        }
     }
 }
 
