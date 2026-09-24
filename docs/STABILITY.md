@@ -16,11 +16,22 @@ meaning something, and where it will not be treated as a cost at all.
 | Tier | Crates | What it means |
 |---|---|---|
 | **Contract** | `chapbook-core`, `chapbook-paint`, `chapbook-ffi` | Types that appear in signatures a downstream must name. Breaking one breaks every shell *and* every backend at once. Changed most reluctantly. |
-| **API** | `chapbook-reader`, `chapbook-library`, `chapbook-annotations`, `chapbook-sync`, `opds-client` | What a downstream calls. Semver discipline: breaking changes are deliberate, announced in the changelog, and worth the migration. |
+| **API** | `chapbook-reader`, `chapbook-library`, `chapbook-annotations`, `chapbook-sync`, `opds-client`, `chapbook-app` | What a downstream calls. Semver discipline: breaking changes are deliberate, announced in the changelog, and worth the migration. |
 | **Producer** | `chapbook-epub`, `chapbook-cbz`, `chapbook-pdf`, `chapbook-opds` | Format readers behind `Publication`. Depend on one only to open that format directly; through `chapbook-reader` they are an implementation detail. |
 | **Backend** | `chapbook-render-tinyskia`, `chapbook-render-vello` | Implementations of a Contract-tier trait. The *trait* is stable; the crate implementing it is free to change, because substituting it is the point. |
 | **Internal** | `chapbook-layout` | No stability of any kind. It exists to make the engine work, its DOM binding and cascade driver follow stylo's shape rather than a design of their own, and a stylo upgrade rewrites them. |
-| **Not a library** | `chapbook-viewer`, `chapbook-viewer-gtk`, `chapbook-viewer-win32`, `tools/chapbook-cli`, `chapbook-jni`, `chapbook-app`, `chapbook-app-gtk` | Their surface is not their Rust API. For the binaries it is a command line; for `chapbook-jni` it is the AAR's Kotlin API, which is why it is here rather than in a tier of its own. The reference shells exist to be read and copied, not linked. `chapbook-app` and `chapbook-app-gtk` are the two halves of the desktop application — the model crate serves its own front ends, and a downstream builds on `chapbook-reader`, not on it. |
+| **Not a library** | `chapbook-viewer`, `chapbook-viewer-gtk`, `chapbook-viewer-win32`, `tools/chapbook-cli`, `chapbook-jni`, `chapbook-app-gtk` | Their surface is not their Rust API. For the binaries it is a command line; for `chapbook-jni` it is the AAR's Kotlin API, which is why it is here rather than in a tier of its own. The reference shells exist to be read and copied, not linked. |
+
+**`chapbook-app` moved from "Not a library" to API.** It was the desktop
+application's model crate, serving one front end in the same repository.
+It is now the application layer every front end drives — GTK directly,
+iOS through `cb_app_*` in the C ABI, Android through `chapbook-jni` —
+and its Rust surface is what the header and the JNI natives are shaped
+over, so a change to it is felt in three languages. That is API-tier
+blast radius. It is not Contract tier because its types do not appear in
+a backend's or a producer's signatures; a downstream that wants only a
+session still builds on `chapbook-reader` and never names it.
+`docs/APP.md` says what it holds.
 
 ## Why the lines fall there
 
