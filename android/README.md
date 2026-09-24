@@ -31,11 +31,11 @@ cd android && ./gradlew :demo:assembleDebug
 Prerequisites that are not guessable:
 
 - **The NDK is the only prerequisite, and it is not optional.** The engine
-  cross-compiles clean with no NDK at all except for two C dependencies:
+  cross-compiles clean with no NDK at all except for one C dependency:
   bundled SQLite (`libsqlite3-sys`, on every build path — the library is
-  where positions live) and `ring` (TLS, only with the `opds` feature).
-  Both want the NDK's clang; `cargo-ndk` exists to set `CC`/`AR` per
-  target and nothing else needs configuring.
+  where positions live). It wants the NDK's clang; `cargo-ndk` exists to
+  set `CC`/`AR` per target and nothing else needs configuring. (`ring`
+  would be the second, but this binding bundles no TLS — see below.)
 - **NDK 28.2 rather than the newest**: the current stable line, and it
   emits 16 KB page alignment by default, which Android 15 requires of
   anything targeting API 35+.
@@ -55,8 +55,11 @@ is bundled (`rusqlite`'s `bundled` feature is the only supported
 arrangement for native code, not a workaround) and crypto is bundled too.
 The part that must **not** be bundled is the trust store: `webpki-roots`
 ignores enterprise roots, user CAs, network security config and OS root
-updates. The day OPDS ships on Android, the answer is
-`rustls-platform-verifier`, which asks the device's `X509TrustManager`.
+updates. OPDS and sync ship on Android with no Rust TLS at all: the
+binding's `opds` feature leaves `ureq` off, and `Catalog` and `SyncWorker`
+both fetch through a Kotlin `SyncTransport` over the platform's own HTTP
+stack, so the trust store is the device's by construction and the app
+attaches its own credentials per request.
 Two sysroot entries are actively wanted: `libjnigraphics`
 (`AndroidBitmap_lockPixels`, the `render_into` destination) and
 `libnativewindow` for a `SurfaceView` path later.
