@@ -313,9 +313,14 @@ internal static partial class Interop
     internal static partial Status cb_library_default_dir(
         byte[]? buf, nuint cap, out nuint needed);
 
+    // The query crosses by pointer (`const cb_book_query *`), so `in`, not
+    // by value. On Windows x64 a struct this size is passed as an implicit
+    // pointer either way, which is why by-value worked there; on the SysV
+    // ABI a 48-byte struct goes on the stack instead, and the engine then
+    // reads the wrong bytes as its out-pointer. `in` is a pointer on both.
     [LibraryImport(Library)]
     internal static partial Status cb_library_query(
-        nint library, NativeBookQuery query, out nint shelf);
+        nint library, in NativeBookQuery query, out nint shelf);
 
     [LibraryImport(Library)]
     internal static partial void cb_shelf_free(nint shelf);

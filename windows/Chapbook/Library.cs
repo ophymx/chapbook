@@ -145,7 +145,7 @@ public sealed class Library : IDisposable
                 Offset = (nuint)Math.Max(0, query.Offset),
             };
             ChapbookException.Check(
-                Interop.cb_library_query(Live(), native, out nint shelf), nameof(Books));
+                Interop.cb_library_query(Live(), in native, out nint shelf), nameof(Books));
             try
             {
                 return ReadShelf(shelf);
