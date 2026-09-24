@@ -48,11 +48,31 @@
       <Link>chapbook_ffi.dll</Link>
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
+    <!--
+      The same native library under its Linux and macOS names, so the
+      binding and its tests run wherever `cargo build -p chapbook-ffi`
+      does — `DllImport("chapbook_ffi")` resolves `libchapbook_ffi.so`
+      / `.dylib` beside the assembly. The Windows path above stays the
+      shipping one; these keep a non-Windows CI job (and a Linux dev
+      box) from being the one platform this binding cannot be run on.
+    -->
+    <None Include="$(ChapbookNativeDir)libchapbook_ffi.so" Condition="Exists('$(ChapbookNativeDir)libchapbook_ffi.so')">
+      <Link>libchapbook_ffi.so</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Include="$(ChapbookNativeDir)libchapbook_ffi.dylib" Condition="Exists('$(ChapbookNativeDir)libchapbook_ffi.dylib')">
+      <Link>libchapbook_ffi.dylib</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
   </ItemGroup>
 
+  <!--
+    The native library goes by three names across platforms; warn when
+    none of them is where a build expects it.
+  -->
   <Target Name="ChapbookNativeMissing" BeforeTargets="Build"
-          Condition="!Exists('$(ChapbookNativeDir)chapbook_ffi.dll')">
-    <Warning Text="chapbook_ffi.dll is not in $(ChapbookNativeDir). Run windows\build-native.ps1 first; without it this assembly builds and every call throws DllNotFoundException at runtime." />
+          Condition="!Exists('$(ChapbookNativeDir)chapbook_ffi.dll') And !Exists('$(ChapbookNativeDir)libchapbook_ffi.so') And !Exists('$(ChapbookNativeDir)libchapbook_ffi.dylib')">
+    <Warning Text="No chapbook_ffi native library in $(ChapbookNativeDir). Build it first (Windows: windows\build-native.ps1; Linux/macOS: cargo build -p chapbook-ffi); without it this assembly builds and every call throws DllNotFoundException at runtime." />
   </Target>
 
 </Project>
