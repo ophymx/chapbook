@@ -311,7 +311,13 @@ fun ReaderScreen(bookId: Long, onBack: () -> Unit) {
             )
         }
         AnimatedVisibility(visible = chrome, modifier = Modifier.align(Alignment.BottomCenter)) {
-            BottomAppBar(containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.94f)) {
+            // A translucent container has no content colour Material can
+            // look up, so the icons fell back to black on a dark bar. Say
+            // it outright.
+            BottomAppBar(
+                containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.94f),
+                contentColor = MaterialTheme.colorScheme.onSurface,
+            ) {
                 IconButton(onClick = { sheet = Sheet.Contents }) {
                     Icon(Icons.AutoMirrored.Filled.List, contentDescription = stringResource(R.string.contents))
                 }
