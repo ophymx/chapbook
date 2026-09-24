@@ -3,30 +3,32 @@
 //! catalog and comic servers, library-lending stacks.
 //!
 //! **Bring your own HTTP.** The crate is format and protocol knowledge; it
-//! opens no sockets of its own. Implement [`HttpClient`] over whatever your
-//! platform gives you and the crate does the rest:
+//! opens no sockets of its own. A request is an [`http::Request`] and a
+//! response an [`http::Response`] — the `http` crate's types, which every
+//! transport-agnostic Rust HTTP library shares — and any function from
+//! one to the other is an [`HttpClient`]. Hand the request to whatever
+//! owns networking on your platform and the crate does the rest:
 //!
 //! ```no_run
-//! use opds_client::http::{HttpClient, HttpError, HttpRequest, HttpResponse};
+//! use opds_client::http::{HttpRequest, HttpResponse};
 //! use opds_client::OpdsClient;
 //!
-//! struct HostHttp;
-//!
-//! impl HttpClient for HostHttp {
-//!     fn get(&self, request: HttpRequest) -> Result<HttpResponse, HttpError> {
-//!         // Hand request.url and request.headers to URLSession, OkHttp,
-//!         // fetch, or whatever else owns networking here.
-//! #       unimplemented!()
-//!     }
+//! fn host_http(request: HttpRequest) -> Result<HttpResponse, std::io::Error> {
+//!     // Hand request.uri(), request.method() and request.headers() to
+//!     // URLSession, OkHttp, fetch, or whatever else owns networking here.
+//! #   unimplemented!()
 //! }
 //!
-//! let client = OpdsClient::new(HostHttp);
+//! let client = OpdsClient::new(host_http);
 //! let feed = client.fetch("https://catalog.example.com/opds/")?;
 //! for entry in &feed.entries {
 //!     println!("{}", entry.title);
 //! }
 //! # Ok::<(), opds_client::OpdsError>(())
 //! ```
+//!
+//! A type that holds state — a session, a connection pool — implements
+//! the trait's one method, `send`, instead.
 //!
 //! On desktop there is no need to write one: `OpdsClient::with_ureq()`
 //! supplies `UreqHttp`, behind the default `ureq` feature. With
@@ -118,7 +120,7 @@ pub use client::{
 };
 pub use download::DownloadRequest;
 pub use href::resolve_url;
-pub use http::{HttpClient, HttpError, HttpRequest, HttpResponse};
+pub use http::{Body, HttpClient, HttpError, HttpRequest, HttpResponse};
 pub use model::{
     AuthDocument, AuthFlow, AuthLink, Entry, Feed, Group, Link, MediaType, OpdsVersion, Price,
     Series, Totals, AUTH_BASIC, REL_ACQ_PREFIX, REL_FACET, REL_IMAGE, REL_PSE_STREAM,

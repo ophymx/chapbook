@@ -406,7 +406,10 @@ pub(crate) mod host {
     use std::ffi::{c_void, CString};
     use std::io::Cursor;
 
-    use chapbook_reader::{HttpClient, HttpError, HttpRequest, HttpResponse};
+    use chapbook_reader::chapbook_opds::http::{
+        header, HeaderName, HeaderValue, Method, Response, StatusCode,
+    };
+    use chapbook_reader::{Body, HttpClient, HttpError, HttpRequest, HttpResponse};
 
     use super::{cb_http_finalize_fn, cb_http_header, cb_http_request};
 
@@ -446,14 +449,19 @@ pub(crate) mod host {
         f: impl FnOnce(*const cb_http_request) -> T,
     ) -> Result<T, HttpError> {
         let no_nul = |what: &str| HttpError::new(format!("{what} contains an interior NUL"));
-        let url = CString::new(request.url.as_str()).map_err(|_| no_nul("url"))?;
+        let url = CString::new(request.uri().to_string()).map_err(|_| no_nul("url"))?;
         // The CStrings own the bytes the header pointers borrow; moving a
         // CString into the vec does not move its heap buffer.
-        let mut owned: Vec<(CString, CString)> = Vec::with_capacity(request.headers.len());
-        for (name, value) in &request.headers {
+        let mut owned: Vec<(CString, CString)> = Vec::with_capacity(request.headers().len());
+        for (name, value) in request.headers() {
+            // A header value that is not text has no C string to become;
+            // nothing this engine sends is one.
+            let value = value
+                .to_str()
+                .map_err(|_| HttpError::new(format!("header {name} is not text")))?;
             owned.push((
                 CString::new(name.as_str()).map_err(|_| no_nul("a header name"))?,
-                CString::new(value.as_str()).map_err(|_| no_nul("a header value"))?,
+                CString::new(value).map_err(|_| no_nul("a header value"))?,
             ));
         }
         let headers: Vec<cb_http_header> = owned
@@ -483,45 +491,61 @@ pub(crate) mod host {
             if let Some(message) = self.error {
                 return Err(HttpError::new(message));
             }
-            match self.status {
-                Some(status) => Ok(HttpResponse {
-                    status,
-                    content_type: self.content_type,
-                    headers: self.headers,
-                    body: Box::new(Cursor::new(self.body)),
-                }),
-                None => Err(HttpError::new(
+            let Some(status) = self.status else {
+                return Err(HttpError::new(
                     "the host transport returned without reporting a status or a failure",
-                )),
+                ));
+            };
+            let status = StatusCode::from_u16(status)
+                .map_err(|_| HttpError::new(format!("{status} is not an HTTP status")))?;
+            let mut response = Response::new(Box::new(Cursor::new(self.body)) as Body);
+            *response.status_mut() = status;
+            let headers = response.headers_mut();
+            if let Some(content_type) = self.content_type {
+                if let Ok(value) = HeaderValue::from_str(&content_type) {
+                    headers.insert(header::CONTENT_TYPE, value);
+                }
             }
+            for (name, value) in self.headers {
+                // A transport may pass all headers or only the ones it can
+                // cheaply enumerate, so one it reports in a shape HTTP
+                // does not allow is read as not reported.
+                let (Ok(name), Ok(value)) = (
+                    HeaderName::from_bytes(name.as_bytes()),
+                    HeaderValue::from_str(&value),
+                ) else {
+                    continue;
+                };
+                headers.append(name, value);
+            }
+            Ok(response)
         }
     }
 
     impl HttpClient for HostTransport {
-        fn get(&self, request: HttpRequest) -> Result<HttpResponse, HttpError> {
+        /// One door, two callbacks: a GET goes to the host's `get`, and
+        /// every other method to its `send`, which a read-only host did
+        /// not install — in which case the write is refused, by name,
+        /// rather than dropped.
+        fn send(&self, request: HttpRequest) -> Result<HttpResponse, HttpError> {
             let mut response = super::cb_http_response::default();
-            with_c_request(&request, |raw| {
-                // SAFETY: the callback the host installed, with pointers
-                // valid for exactly this call.
-                unsafe { (self.get)(raw, &mut response, self.user()) }
-            })?;
-            response.settle()
-        }
-
-        fn send(
-            &self,
-            method: chapbook_reader::chapbook_opds::http::HttpMethod,
-            request: HttpRequest,
-            body: Option<Vec<u8>>,
-        ) -> Result<HttpResponse, HttpError> {
+            if request.method() == Method::GET {
+                with_c_request(&request, |raw| {
+                    // SAFETY: the callback the host installed, with
+                    // pointers valid for exactly this call.
+                    unsafe { (self.get)(raw, &mut response, self.user()) }
+                })?;
+                return response.settle();
+            }
             let Some(send) = self.send else {
-                return Err(HttpError::new(
-                    "the host transport has no send callback, so it cannot write",
-                ));
+                return Err(HttpError::new(format!(
+                    "the host transport has no send callback, so it cannot {}",
+                    request.method()
+                )));
             };
-            let method = CString::new(method.as_str()).expect("method tokens contain no NUL");
-            let mut response = super::cb_http_response::default();
-            let body = body.unwrap_or_default();
+            let method =
+                CString::new(request.method().as_str()).expect("method tokens contain no NUL");
+            let body = request.body();
             let (bytes, len) = if body.is_empty() {
                 (std::ptr::null(), 0)
             } else {

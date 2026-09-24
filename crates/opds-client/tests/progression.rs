@@ -14,7 +14,9 @@ use std::collections::HashMap;
 use std::io::Cursor;
 use std::sync::{Arc, Mutex};
 
-use opds_client::http::{HttpClient, HttpError, HttpMethod, HttpRequest, HttpResponse};
+use opds_client::http::{
+    header, Body, HttpClient, HttpError, HttpRequest, HttpResponse, Method, Response,
+};
 use opds_client::progression::{
     Device, Progression, ProgressionUpdate, RefusalReason, MEDIA_TYPE_PROGRESSION,
 };
@@ -76,7 +78,7 @@ type CannedResponse = (u16, String, String);
 /// One request as the transport saw it.
 #[derive(Clone)]
 struct Seen {
-    method: &'static str,
+    method: String,
     url: String,
     headers: Headers,
     body: Vec<u8>,
@@ -115,49 +117,44 @@ impl FakeHttp {
         self.0.seen.lock().unwrap().clone()
     }
 
-    fn record(&self, method: &'static str, request: &HttpRequest, body: Vec<u8>) {
+    fn record(&self, request: &HttpRequest) {
         self.0.seen.lock().unwrap().push(Seen {
-            method,
-            url: request.url.clone(),
-            headers: request.headers.clone(),
-            body,
+            method: request.method().to_string(),
+            url: request.uri().to_string(),
+            headers: request
+                .headers()
+                .iter()
+                .filter_map(|(n, v)| Some((n.to_string(), v.to_str().ok()?.to_string())))
+                .collect(),
+            body: request.body().clone(),
         });
     }
 
     fn serve(routes: &Mutex<HashMap<String, CannedResponse>>, url: &str) -> HttpResponse {
         let path = url.trim_start_matches(HOST);
         match routes.lock().unwrap().get(path) {
-            Some((status, content_type, body)) => HttpResponse {
-                status: *status,
-                content_type: Some(content_type.clone()),
-                headers: Vec::new(),
-                body: Box::new(Cursor::new(body.clone().into_bytes())),
-            },
-            None => HttpResponse {
-                status: 404,
-                content_type: None,
-                headers: Vec::new(),
-                body: Box::new(Cursor::new(Vec::new())),
-            },
+            Some((status, content_type, body)) => Response::builder()
+                .status(*status)
+                .header(header::CONTENT_TYPE, content_type)
+                .body(Box::new(Cursor::new(body.clone().into_bytes())) as Body)
+                .unwrap(),
+            None => Response::builder()
+                .status(404)
+                .body(Box::new(Cursor::new(Vec::new())) as Body)
+                .unwrap(),
         }
     }
 }
 
 impl HttpClient for FakeHttp {
-    fn get(&self, request: HttpRequest) -> Result<HttpResponse, HttpError> {
-        self.record("GET", &request, Vec::new());
-        Ok(Self::serve(&self.0.get_routes, &request.url))
-    }
-
-    fn send(
-        &self,
-        method: HttpMethod,
-        request: HttpRequest,
-        body: Option<Vec<u8>>,
-    ) -> Result<HttpResponse, HttpError> {
-        assert_eq!(method, HttpMethod::Put, "progression only ever PUTs");
-        self.record(method.as_str(), &request, body.unwrap_or_default());
-        Ok(Self::serve(&self.0.put_routes, &request.url))
+    fn send(&self, request: HttpRequest) -> Result<HttpResponse, HttpError> {
+        self.record(&request);
+        let url = request.uri().to_string();
+        match *request.method() {
+            Method::GET => Ok(Self::serve(&self.0.get_routes, &url)),
+            Method::PUT => Ok(Self::serve(&self.0.put_routes, &url)),
+            ref other => panic!("progression only ever GETs and PUTs, not {other}"),
+        }
     }
 }
 
@@ -346,12 +343,18 @@ fn an_out_of_range_progression_never_reaches_the_network() {
 
 #[test]
 fn a_transport_that_cannot_write_says_so_instead_of_dropping_the_write() {
-    /// A read-only transport: GET only, as every implementation was
-    /// before the `write` feature existed.
+    /// A read-only transport: it refuses every method but GET, by name,
+    /// which is what the trait asks of a host that only browses.
     struct GetOnly;
     impl HttpClient for GetOnly {
-        fn get(&self, _: HttpRequest) -> Result<HttpResponse, HttpError> {
-            unreachable!("the flow under test never gets this far")
+        fn send(&self, request: HttpRequest) -> Result<HttpResponse, HttpError> {
+            if request.method() == Method::GET {
+                unreachable!("the flow under test never gets this far");
+            }
+            Err(HttpError::new(format!(
+                "read-only transport cannot {}",
+                request.method()
+            )))
         }
     }
 

@@ -49,8 +49,7 @@
 //!   [`Link`], putting draft shape into the stable model to save one
 //!   request; the 401 flow already works. Revisit if the draft is released.
 
-use std::io::Read;
-
+use crate::http::{header, settle, HeaderValue, Method};
 use crate::model::{AuthDocument, Entry, Feed, Link};
 use crate::{OpdsClient, OpdsError};
 
@@ -218,35 +217,35 @@ impl OpdsClient {
         }
         let body = serde_json::to_vec(progression)
             .map_err(|e| OpdsError::Parse(format!("serialize progression: {e}")))?;
-        let request = self
-            .request(url, MEDIA_TYPE_PROGRESSION)
-            .header("Content-Type", MEDIA_TYPE_PROGRESSION);
+        let mut request = self.request(url, MEDIA_TYPE_PROGRESSION)?;
+        *request.method_mut() = Method::PUT;
+        request.headers_mut().insert(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static(MEDIA_TYPE_PROGRESSION),
+        );
+        *request.body_mut() = body;
 
-        let mut response = self
+        let response = self
             .transport()
-            .send(crate::http::HttpMethod::Put, request, Some(body))
+            .send(request)
             .map_err(|e| OpdsError::Network(e.to_string()))?;
-        let status = response.status;
-        let content_type = response.content_type.clone();
-        let mut body = Vec::new();
-        response
-            .body
-            .read_to_end(&mut body)
-            .map_err(|e| OpdsError::Network(format!("read body: {e}")))?;
+        let settled =
+            settle(response).map_err(|e| OpdsError::Network(format!("read body: {e}")))?;
+        let (status, body) = (settled.status, &settled.body);
 
         if status == 401 {
-            let auth_doc = content_type
-                .as_deref()
+            let auth_doc = settled
+                .content_type()
                 .filter(|t| t.contains("opds-authentication"))
-                .and_then(|_| serde_json::from_slice::<AuthDocument>(&body).ok());
+                .and_then(|_| serde_json::from_slice::<AuthDocument>(body).ok());
             return Err(OpdsError::AuthRequired(auth_doc.map(Box::new)));
         }
         match status {
-            201 => Ok(ProgressionUpdate::Created(parse_optional(&body)?)),
+            201 => Ok(ProgressionUpdate::Created(parse_optional(body)?)),
             // Any other 2xx is read as "stored": the draft names 200 and
             // 201, and a service answering 204 has still accepted it.
-            200..=299 => Ok(ProgressionUpdate::Stored(parse_optional(&body)?)),
-            400 | 403 | 409 => Ok(ProgressionUpdate::Refused(refusal(status, &body))),
+            200..=299 => Ok(ProgressionUpdate::Stored(parse_optional(body)?)),
+            400 | 403 | 409 => Ok(ProgressionUpdate::Refused(refusal(status, body))),
             // Everything else — 404 at a URL with no service, a 5xx — is a
             // failure rather than a decision about the position.
             _ => Err(OpdsError::Http(status)),

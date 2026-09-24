@@ -23,3 +23,8 @@ chapbook-reader = { workspace = true, features = ["library"] }
 # Forwards the bundled desktop transport, as the other binding crates do.
 default = ["ureq"]
 ureq = ["chapbook-opds/ureq", "chapbook-annotations/ureq"]
+
+# The live example opens a socket, which only the bundled transport can.
+[[example]]
+name = "reconcile"
+required-features = ["ureq"]

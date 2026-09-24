@@ -151,16 +151,20 @@ impl SyncEngine {
     /// [`Device`]'s docs. This crate neither generates nor persists one.
     ///
     /// One transport serves both protocols, which is the point of it being
-    /// `Arc`: a host owns one of these.
+    /// `Arc`: a host owns one of these. The two crates each declare their
+    /// own transport trait over the same `http` types, so the container
+    /// takes the catalog's transport as a closure and neither crate has to
+    /// name the other.
     pub fn new(
         library: Library,
         http: std::sync::Arc<dyn HttpClient>,
         device: Device,
     ) -> SyncEngine {
+        let shared = http.clone();
         SyncEngine {
             library,
-            catalog: OpdsClient::new(http.clone()),
-            container: AnnotationContainer::new(http),
+            catalog: OpdsClient::new(http),
+            container: AnnotationContainer::new(move |request| shared.send(request)),
             device,
         }
     }

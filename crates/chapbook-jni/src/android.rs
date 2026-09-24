@@ -1864,7 +1864,20 @@ struct KtTransport {
     transport: jni::objects::GlobalRef,
 }
 
-use chapbook_sync::{HttpError, HttpRequest, HttpResponse};
+use chapbook_sync::{Body, HttpError, HttpRequest, HttpResponse};
+
+/// What a transport call can go wrong with: the JNI itself, or a response
+/// Kotlin built in a shape HTTP does not allow.
+enum KtError {
+    Jni(jni::errors::Error),
+    Bad(String),
+}
+
+impl From<jni::errors::Error> for KtError {
+    fn from(error: jni::errors::Error) -> Self {
+        KtError::Jni(error)
+    }
+}
 
 impl KtTransport {
     /// Attach the worker thread (as a daemon, once — it lives for the
@@ -1872,7 +1885,7 @@ impl KtTransport {
     /// into the transport failure it is.
     fn with_env<T>(
         &self,
-        f: impl FnOnce(&mut JNIEnv) -> Result<T, jni::errors::Error>,
+        f: impl FnOnce(&mut JNIEnv) -> Result<T, KtError>,
     ) -> Result<T, HttpError> {
         let mut env = self
             .vm
@@ -1896,19 +1909,27 @@ impl KtTransport {
                 .unwrap_or_else(|| "the transport threw".to_string());
             return Err(HttpError::new(message));
         }
-        result.map_err(|e| HttpError::new(format!("transport call failed: {e}")))
+        result.map_err(|e| match e {
+            KtError::Jni(e) => HttpError::new(format!("transport call failed: {e}")),
+            KtError::Bad(message) => HttpError::new(message),
+        })
     }
 }
 
 /// Request headers as Kotlin sees them: one flat array, names and values
-/// interleaved.
+/// interleaved. A value that is not text has no Java string to become
+/// and is left out; nothing the engine sends is one.
 fn kt_headers<'l>(
     env: &mut JNIEnv<'l>,
-    headers: &[(String, String)],
+    headers: &http::HeaderMap,
 ) -> Result<jni::objects::JObjectArray<'l>, jni::errors::Error> {
+    let pairs: Vec<(&str, &str)> = headers
+        .iter()
+        .filter_map(|(name, value)| Some((name.as_str(), value.to_str().ok()?)))
+        .collect();
     let class = env.find_class("java/lang/String")?;
-    let array = env.new_object_array((headers.len() * 2) as jint, class, JObject::null())?;
-    for (index, (name, value)) in headers.iter().enumerate() {
+    let array = env.new_object_array((pairs.len() * 2) as jint, class, JObject::null())?;
+    for (index, (name, value)) in pairs.iter().enumerate() {
         let name = env.new_string(name)?;
         env.set_object_array_element(&array, (index * 2) as jint, name)?;
         let value = env.new_string(value)?;
@@ -1918,7 +1939,7 @@ fn kt_headers<'l>(
 }
 
 /// A `SyncResponse` read back into the engine's shape.
-fn kt_response(env: &mut JNIEnv, response: JObject) -> Result<HttpResponse, jni::errors::Error> {
+fn kt_response(env: &mut JNIEnv, response: JObject) -> Result<HttpResponse, KtError> {
     let status = env.get_field(&response, "status", "I")?.i()? as u16;
     let content_type = {
         let value = env
@@ -1960,42 +1981,53 @@ fn kt_response(env: &mut JNIEnv, response: JObject) -> Result<HttpResponse, jni:
             env.convert_byte_array(jni::objects::JByteArray::from(raw))?
         }
     };
-    Ok(HttpResponse {
-        status,
-        content_type,
-        headers,
-        body: Box::new(std::io::Cursor::new(body)),
-    })
+    let mut out = http::Response::new(Box::new(std::io::Cursor::new(body)) as Body);
+    *out.status_mut() = http::StatusCode::from_u16(status)
+        .map_err(|_| KtError::Bad(format!("{status} is not an HTTP status")))?;
+    let out_headers = out.headers_mut();
+    if let Some(content_type) = content_type {
+        if let Ok(value) = http::HeaderValue::from_str(&content_type) {
+            out_headers.insert(http::header::CONTENT_TYPE, value);
+        }
+    }
+    for (name, value) in headers {
+        // A header in a shape HTTP does not allow is read as not
+        // reported, the same latitude the C ABI gives a host.
+        let (Ok(name), Ok(value)) = (
+            http::HeaderName::from_bytes(name.as_bytes()),
+            http::HeaderValue::from_str(&value),
+        ) else {
+            continue;
+        };
+        out_headers.append(name, value);
+    }
+    Ok(out)
 }
 
 impl chapbook_sync::HttpClient for KtTransport {
-    fn get(&self, request: HttpRequest) -> Result<HttpResponse, HttpError> {
+    /// One door, two Kotlin methods: a GET goes to `get`, everything else
+    /// to `send` with the verb spelled out.
+    fn send(&self, request: HttpRequest) -> Result<HttpResponse, HttpError> {
+        if request.method() == http::Method::GET {
+            return self.with_env(|env| {
+                let url = env.new_string(request.uri().to_string())?;
+                let headers = kt_headers(env, request.headers())?;
+                let response = env
+                    .call_method(
+                        self.transport.as_obj(),
+                        "get",
+                        "(Ljava/lang/String;[Ljava/lang/String;)Lcom/ophymx/chapbook/SyncResponse;",
+                        &[(&url).into(), (&headers).into()],
+                    )?
+                    .l()?;
+                kt_response(env, response)
+            });
+        }
         self.with_env(|env| {
-            let url = env.new_string(&request.url)?;
-            let headers = kt_headers(env, &request.headers)?;
-            let response = env
-                .call_method(
-                    self.transport.as_obj(),
-                    "get",
-                    "(Ljava/lang/String;[Ljava/lang/String;)Lcom/ophymx/chapbook/SyncResponse;",
-                    &[(&url).into(), (&headers).into()],
-                )?
-                .l()?;
-            kt_response(env, response)
-        })
-    }
-
-    fn send(
-        &self,
-        method: chapbook_sync::HttpMethod,
-        request: HttpRequest,
-        body: Option<Vec<u8>>,
-    ) -> Result<HttpResponse, HttpError> {
-        self.with_env(|env| {
-            let verb = env.new_string(method.as_str())?;
-            let url = env.new_string(&request.url)?;
-            let headers = kt_headers(env, &request.headers)?;
-            let body = env.byte_array_from_slice(&body.unwrap_or_default())?;
+            let verb = env.new_string(request.method().as_str())?;
+            let url = env.new_string(request.uri().to_string())?;
+            let headers = kt_headers(env, request.headers())?;
+            let body = env.byte_array_from_slice(request.body())?;
             let response = env
                 .call_method(
                     self.transport.as_obj(),

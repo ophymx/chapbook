@@ -7,7 +7,8 @@ use std::io::Cursor;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use chapbook_app::chapbook_opds::{HttpClient, HttpError, HttpRequest, HttpResponse};
+use chapbook_app::chapbook_opds::http::{header, Response};
+use chapbook_app::chapbook_opds::{Body, HttpClient, HttpError, HttpRequest, HttpResponse};
 use chapbook_app::chapbook_reader::chapbook_core::{
     CredentialKey, CredentialLookup, FontSource, Freshness, MemoryCredentials,
 };
@@ -131,34 +132,34 @@ impl Server {
         chapbook_app::chapbook_reader::chapbook_core::basic_authorization("reader", "secret")
     }
     fn respond(status: u16, content_type: &str, body: Vec<u8>) -> HttpResponse {
-        HttpResponse {
-            status,
-            content_type: Some(content_type.to_string()),
-            headers: Vec::new(),
-            body: Box::new(Cursor::new(body)),
-        }
+        Response::builder()
+            .status(status)
+            .header(header::CONTENT_TYPE, content_type)
+            .body(Box::new(Cursor::new(body)) as Body)
+            .expect("a well-formed canned response")
     }
 }
 
 impl HttpClient for Server {
-    fn get(&self, request: HttpRequest) -> Result<HttpResponse, HttpError> {
+    fn send(&self, request: HttpRequest) -> Result<HttpResponse, HttpError> {
+        let url = request.uri().to_string();
         let authorization = request
-            .headers
-            .iter()
-            .find(|(name, _)| name.eq_ignore_ascii_case("authorization"))
-            .map(|(_, value)| value.clone());
+            .headers()
+            .get(header::AUTHORIZATION)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_string);
         self.seen
             .lock()
             .unwrap()
-            .push((request.url.clone(), authorization.clone()));
-        if request.url == "https://down.test/" {
+            .push((url.clone(), authorization.clone()));
+        if url == "https://down.test/" {
             return Err(HttpError::new("nobody home"));
         }
         let atom = "application/atom+xml;profile=opds-catalog";
-        if request.url.starts_with(OTHER) {
+        if url.starts_with(OTHER) {
             return Ok(Server::respond(200, atom, section().into_bytes()));
         }
-        let path = request.url.strip_prefix(HOST).unwrap_or("");
+        let path = url.strip_prefix(HOST).unwrap_or("");
         let wants_credential = !self.public_root || path.starts_with("/search");
         if wants_credential && authorization.as_deref() != Some(&*Server::expected_authorization())
         {

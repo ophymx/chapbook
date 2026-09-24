@@ -74,7 +74,7 @@ pub use cosmic_text;
 // A shell that owns its networking implements this, so it has to be
 // nameable from here — the same rule as the display-list vocabulary above.
 #[cfg(feature = "opds")]
-pub use chapbook_opds::http::{HttpClient, HttpError, HttpRequest, HttpResponse};
+pub use chapbook_opds::http::{Body, HttpClient, HttpError, HttpRequest, HttpResponse};
 // The catalog client itself, for a binding that browses one. Re-exported
 // rather than depended on directly, so a shell keeps depending on this
 // crate alone — `docs/STABILITY.md`'s rule — and cannot skew versions

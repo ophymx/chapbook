@@ -9,6 +9,7 @@ repository.workspace = true
 authors.workspace = true
 
 [dependencies]
+http = { workspace = true }
 quick-xml = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -28,12 +29,8 @@ ureq = ["dep:ureq"]
 # OPDS Progression 1.0 position sync. Off by default because the spec is an
 # unreleased draft (drafts.opds.io, absent from specs.opds.io) whose wire
 # format can still change — not because it costs dependencies, since it adds
-# none. Turning it on is a caller accepting that surface may move; it also
-# adds `HttpClient::put`, which has a refusing default so existing
-# transports keep compiling. See src/progression.rs and INTEROP.md §6.
-progression = ["write"]
-# The write side of the transport: `HttpClient::send`. A feature rather than
-# always-on because a read-only host — a catalog browser, a WASM build that
-# only downloads — should not have to implement a method it never calls, and
-# the refusing default is what tells it so at runtime if it does.
-write = []
+# none. Turning it on is a caller accepting that surface may move. The PUT
+# it sends goes through the same `HttpClient::send` as every GET; a
+# read-only transport refuses it by method. See src/progression.rs and
+# INTEROP.md §6.
+progression = []

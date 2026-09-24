@@ -10,7 +10,9 @@ use std::sync::{Arc, Mutex};
 
 use chapbook_core::{LayeredLocator, Quote, LOCATOR_VERSION};
 use chapbook_library::{AnnotationKind, BookId, Library};
-use chapbook_opds::http::{HttpClient, HttpError, HttpMethod, HttpRequest, HttpResponse};
+use chapbook_opds::http::{
+    header, Body, HttpClient, HttpError, HttpRequest, HttpResponse, Response,
+};
 use chapbook_opds::progression::Device;
 use chapbook_sync::{PositionReport, SyncEngine, SyncError};
 use serde_json::json;
@@ -102,54 +104,49 @@ impl FakeHttp {
             .collect()
     }
 
-    fn serve(&self, method: &str, request: &HttpRequest, body: Vec<u8>) -> HttpResponse {
-        let path = request.url.trim_start_matches(HOST).to_string();
+    fn serve(&self, request: &HttpRequest) -> HttpResponse {
+        let method = request.method().as_str();
+        let url = request.uri().to_string();
+        let path = url.trim_start_matches(HOST).to_string();
         self.0.seen.lock().unwrap().push((
             method.to_string(),
             path.clone(),
-            String::from_utf8_lossy(&body).into_owned(),
+            String::from_utf8_lossy(request.body()).into_owned(),
         ));
         let key = format!("{method} {path}");
         if let Some(queue) = self.0.queued.lock().unwrap().get_mut(&key) {
             if !queue.is_empty() {
                 let (status, headers, body) = queue.remove(0);
-                return HttpResponse {
-                    status,
-                    content_type: Some("application/json".into()),
-                    headers,
-                    body: Box::new(Cursor::new(body.into_bytes())),
-                };
+                return canned(status, &headers, body);
             }
         }
         match self.0.routes.lock().unwrap().get(&key) {
-            Some((status, headers, body)) => HttpResponse {
-                status: *status,
-                content_type: Some("application/json".into()),
-                headers: headers.clone(),
-                body: Box::new(Cursor::new(body.clone().into_bytes())),
-            },
-            None => HttpResponse {
-                status: 404,
-                content_type: None,
-                headers: Vec::new(),
-                body: Box::new(Cursor::new(Vec::new())),
-            },
+            Some((status, headers, body)) => canned(*status, headers, body.clone()),
+            None => Response::builder()
+                .status(404)
+                .body(Box::new(Cursor::new(Vec::new())) as Body)
+                .unwrap(),
         }
     }
 }
 
-impl HttpClient for FakeHttp {
-    fn get(&self, request: HttpRequest) -> Result<HttpResponse, HttpError> {
-        Ok(self.serve("GET", &request, Vec::new()))
+/// A scripted response as the transport hands it back: JSON, plus
+/// whatever headers the script named.
+fn canned(status: u16, headers: &[(String, String)], body: String) -> HttpResponse {
+    let mut response = Response::builder()
+        .status(status)
+        .header(header::CONTENT_TYPE, "application/json");
+    for (name, value) in headers {
+        response = response.header(name.as_str(), value.as_str());
     }
+    response
+        .body(Box::new(Cursor::new(body.into_bytes())) as Body)
+        .unwrap()
+}
 
-    fn send(
-        &self,
-        method: HttpMethod,
-        request: HttpRequest,
-        body: Option<Vec<u8>>,
-    ) -> Result<HttpResponse, HttpError> {
-        Ok(self.serve(method.as_str(), &request, body.unwrap_or_default()))
+impl HttpClient for FakeHttp {
+    fn send(&self, request: HttpRequest) -> Result<HttpResponse, HttpError> {
+        Ok(self.serve(&request))
     }
 }
 

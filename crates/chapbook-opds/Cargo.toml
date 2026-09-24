@@ -27,3 +27,8 @@ ureq = ["opds-client/ureq"]
 # it. Off by default for the same reason opds-client gates it: the spec is
 # an unreleased draft whose wire format can still move.
 progression = ["opds-client/progression"]
+
+# The live example opens a socket, which only the bundled transport can.
+[[example]]
+name = "live_catalog"
+required-features = ["ureq"]

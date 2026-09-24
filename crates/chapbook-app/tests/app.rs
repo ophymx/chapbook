@@ -190,7 +190,7 @@ fn sync_with_nothing_syncable_declines_without_a_driver() {
 struct DeadHttp;
 
 impl HttpClient for DeadHttp {
-    fn get(&self, _request: HttpRequest) -> Result<HttpResponse, HttpError> {
+    fn send(&self, _request: HttpRequest) -> Result<HttpResponse, HttpError> {
         Err(HttpError::new("nobody home"))
     }
 }

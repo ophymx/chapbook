@@ -11,14 +11,23 @@ authors.workspace = true
 [dependencies]
 chapbook-core = { workspace = true }
 chapbook-library = { workspace = true }
-opds-client = { workspace = true, features = ["write"] }
+http = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+ureq = { workspace = true, optional = true }
+url = { workspace = true }
 
 [dev-dependencies]
 insta = { workspace = true }
 
 [features]
-# Forwards opds-client's bundled desktop transport, as chapbook-opds does.
+# The bundled desktop transport, the same trade opds-client makes: on by
+# default for a desktop process, off for a host whose networking is its
+# own. The crate names no other HTTP crate — see src/http.rs.
 default = ["ureq"]
-ureq = ["opds-client/ureq"]
+ureq = ["dep:ureq"]
+
+# The live example opens a socket, which only the bundled transport can.
+[[example]]
+name = "live_container"
+required-features = ["ureq"]
