@@ -355,6 +355,15 @@ public final class Library {
 }
 
 extension Session {
+    /// Drop this book's own settings override — scalar settings and the
+    /// chosen typeface both — so it follows the reader's default again,
+    /// applying that default now and keeping the place. The undo for a
+    /// `setSettings(_:scope:)` with `.thisBook`; a no-op for a book that
+    /// never reached the library.
+    public func clearBookSettings() throws {
+        try check(cb_session_clear_book_settings(raw))
+    }
+
     /// The library row this session's book was imported into, or `nil`
     /// for a book that never reached one — an OPDS stream, or a session
     /// configured without a library directory.

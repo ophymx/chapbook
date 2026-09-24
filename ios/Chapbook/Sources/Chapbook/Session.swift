@@ -193,6 +193,27 @@ public final class Session {
         try check(cb_session_release_caches(raw))
     }
 
+    /// Persist the reading position without giving anything up.
+    ///
+    /// [`suspend()`] does this too, but only on the way out — and
+    /// letting a session go does **not** save, so a book closed without
+    /// one of the two reopens where it was last saved. Call it when the
+    /// reader leaves the book for another screen, or before a sync that
+    /// wants the latest position. A no-op for a session with no library.
+    public func savePosition() throws {
+        try check(cb_session_save_position(raw))
+    }
+
+    /// Say how much the caches may hold, evicting at once if they are
+    /// over it; the page on screen is never evicted.
+    ///
+    /// `SessionConfiguration.cacheBudgetBytes` sizes the caches for the
+    /// device at open; this is for a memory warning — halving on a real
+    /// one keeps the next warning from finding the same cache.
+    public func setCacheBudget(_ bytes: Int) throws {
+        try check(cb_session_set_cache_budget(raw, bytes))
+    }
+
     public func cacheBytes() throws -> Int {
         var bytes = 0
         try check(cb_session_cache_bytes(raw, &bytes))

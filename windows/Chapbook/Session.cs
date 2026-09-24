@@ -525,17 +525,42 @@ public sealed partial class Session : IDisposable
     /// afterwards; the library reopens on the next access.
     /// </para>
     /// <para>
-    /// <b>It is also the only way to leave a bookmark.</b> The Rust API
-    /// has a <c>save_position</c> that persists and nothing else; the C
-    /// ABI does not carry one, so across this boundary persisting a place
-    /// means suspending. Disposing a session does <b>not</b> save — a book
-    /// closed without this call reopens where it was last suspended, which
-    /// on a first read is the beginning. Call it before you tear a session
-    /// down, and after any jump you would be sorry to lose.
+    /// <b>Disposing a session does not save.</b> A book closed without
+    /// this call or <see cref="SavePosition"/> reopens where it was last
+    /// saved, which on a first read is the beginning. Call one of the two
+    /// before you tear a session down, and after any jump you would be
+    /// sorry to lose.
     /// </para>
     /// </remarks>
     public void Suspend() =>
         ChapbookException.Check(Interop.cb_session_suspend(Live()), nameof(Suspend));
+
+    /// <summary>
+    /// Persist the reading position without giving anything up — what a
+    /// shell leaving the book for another window calls, where
+    /// <see cref="Suspend"/> is for leaving the process. A no-op for a
+    /// session with no library.
+    /// </summary>
+    public void SavePosition() =>
+        ChapbookException.Check(Interop.cb_session_save_position(Live()), nameof(SavePosition));
+
+    /// <summary>
+    /// Say how much the caches may hold, evicting at once if they are over
+    /// it; the page on screen is never evicted. The configuration's budget
+    /// sizes the caches at open; this lowers them under memory pressure.
+    /// </summary>
+    public void SetCacheBudget(long bytes) =>
+        ChapbookException.Check(
+            Interop.cb_session_set_cache_budget(Live(), checked((nuint)Math.Max(0, bytes))),
+            nameof(SetCacheBudget));
+
+    /// <summary>
+    /// Drop this book's own settings override — scalars and typeface both
+    /// — so it follows the default again, applying it now. The undo for a
+    /// <see cref="SettingsScope.ThisBook"/> change.
+    /// </summary>
+    public void ClearBookSettings() =>
+        ChapbookException.Check(Interop.cb_session_clear_book_settings(Live()), nameof(ClearBookSettings));
 
     /// <summary>Give back everything but the page on screen.</summary>
     public void ReleaseCaches() =>

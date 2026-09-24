@@ -2274,6 +2274,17 @@ cb_status cb_library_sync_annotation_container(const struct cb_library *library,
                                                size_t *needed);
 
 /**
+ * Drop this book's own settings override so it follows the reader's
+ * default again, applying that default now and keeping the place.
+ *
+ * The undo for a `cb_session_set_settings` with `CB_SCOPE_THIS_BOOK`:
+ * a "forget this book's settings" control. The chosen font family goes
+ * with it, since it travels on the same override. A no-op for a book
+ * that never reached the library.
+ */
+cb_status cb_session_clear_book_settings(struct cb_session *session);
+
+/**
  * The library row the open session is reading.
  *
  * The join between the reading view and the shelf: a session *imports*
@@ -2853,6 +2864,29 @@ cb_status cb_session_suspend(struct cb_session *session);
  * the next render. For Android's `onTrimMemory` and iOS's memory warning.
  */
 cb_status cb_session_release_caches(struct cb_session *session);
+
+/**
+ * Persist the reading position without giving anything up.
+ *
+ * `cb_session_suspend` does this too, but only on the way out. A shell
+ * leaving a book for another screen, or a sync that wants the latest
+ * position, wants it on its own — and closing a session does **not**
+ * save, so a book closed without one of the two reopens where it was
+ * last saved. A session with no library has nowhere to write and this
+ * is a no-op, not an error.
+ */
+cb_status cb_session_save_position(struct cb_session *session);
+
+/**
+ * Say how much the caches may hold, evicting at once if they are over
+ * it. The unit on screen is never evicted.
+ *
+ * Runtime rather than construction-only because memory pressure is a
+ * runtime event: `cb_config_set_cache_budget` sizes the caches for the
+ * device, and this lowers them from a trim warning — halving on a real
+ * one keeps the next warning from finding the same cache.
+ */
+cb_status cb_session_set_cache_budget(struct cb_session *session, size_t bytes);
 
 /**
  * Bytes the caches currently hold.

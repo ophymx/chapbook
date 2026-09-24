@@ -138,6 +138,45 @@ private func reader(_ name: String, book: String = "epub/minimal.epub") throws -
     #expect(try !session.go(to: Session.Locator(spine: 999, offset: 0)))
 }
 
+@Test func aSettingScopedToThisBookIsForgottenOnReset() throws {
+    let (session, dir) = try reader("reset")
+    defer { try? FileManager.default.removeItem(at: dir) }
+
+    let before = try session.settings()
+    var bigger = before
+    bigger.baseFontSize += 6
+    try session.setSettings(bigger, scope: .thisBook)
+    try session.setFontFamily("Crimson Text", scope: .thisBook)
+    #expect(try session.settings().baseFontSize == before.baseFontSize + 6)
+    #expect(session.fontFamily() == "Crimson Text")
+
+    // The override goes, typeface included, and the default applies at
+    // once rather than on the next open.
+    try session.clearBookSettings()
+    #expect(try session.settings().baseFontSize == before.baseFontSize)
+    #expect(session.fontFamily() == nil)
+}
+
+@Test func aPlaceIsSavedWithoutSuspendingAndTheBudgetLowersLive() throws {
+    let (session, dir) = try reader("save")
+    defer { try? FileManager.default.removeItem(at: dir) }
+
+    // Closing does not save; saving does, and the session stays open
+    // and paginated afterwards — the difference from `suspend()`.
+    try session.nextPage()
+    let saved = try session.locator()
+    try session.savePosition()
+    #expect(try session.locator() == saved)
+    #expect(try session.pageCount() > 0)
+
+    // A memory warning's move: the ceiling drops now, and the caches
+    // are already under it.
+    let budget = try session.cacheBudget()
+    try session.setCacheBudget(budget / 2)
+    #expect(try session.cacheBudget() == budget / 2)
+    #expect(try session.cacheBytes() <= budget / 2)
+}
+
 @Test func anAnchorLandsInTheUnitEvenWhenTheFragmentIsUnknown() throws {
     let (session, dir) = try reader("anchor")
     defer { try? FileManager.default.removeItem(at: dir) }
