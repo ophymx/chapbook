@@ -149,9 +149,11 @@ impl Drop for SyncDriver {
 }
 
 /// Set the engine's `Authorization` for this book's origin, when the store
-/// has one. Keyed by origin, never by the service URL itself — a catalog
-/// URL's path may be a secret.
+/// has one, and clear it when it has none — the previous book's credential
+/// must not ride along to a service on another host. Keyed by origin,
+/// never by the service URL itself: a catalog URL's path may be a secret.
 fn authorize(engine: &mut SyncEngine, store: &dyn CredentialStore, book: BookId) {
+    engine.clear_authorization();
     let Ok(targets) = engine.library().sync_targets(book) else {
         return;
     };

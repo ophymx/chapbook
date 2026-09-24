@@ -177,6 +177,13 @@ impl SyncEngine {
         self.container.set_authorization(value);
     }
 
+    /// Drop the credential, so the next book's services are reached
+    /// with none — what a driver does between books whose origins differ.
+    pub fn clear_authorization(&mut self) {
+        self.catalog.clear_authorization();
+        self.container.clear_authorization();
+    }
+
     /// The library this engine owns, for a caller that wants to look
     /// something up on this thread rather than open a third connection.
     pub fn library(&self) -> &Library {

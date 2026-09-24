@@ -14,6 +14,8 @@ use chapbook_app::chapbook_reader::chapbook_core::{
 use chapbook_app::{App, BrowseState, Platform};
 
 const HOST: &str = "https://catalog.example.test";
+/// A host the catalog links to and the reader never signed into.
+const OTHER: &str = "https://other.test";
 
 struct TempDir(PathBuf);
 
@@ -63,6 +65,9 @@ fn feed() -> String {
     )
 }
 
+/// The second page: a section here, a section on another host, and a
+/// book with only a page about it — nothing to fetch — that still says
+/// where its reader's place lives.
 fn page2() -> String {
     format!(
         r#"<?xml version="1.0"?>
@@ -70,6 +75,13 @@ fn page2() -> String {
   <id>urn:page2</id><title>Test Shelf</title>
   <entry><id>urn:more</id><title>More</title>
     <link rel="subsection" href="{HOST}/more" type="application/atom+xml;profile=opds-catalog;kind=acquisition"/>
+  </entry>
+  <entry><id>urn:elsewhere</id><title>Elsewhere</title>
+    <link rel="subsection" href="{OTHER}/section" type="application/atom+xml;profile=opds-catalog;kind=acquisition"/>
+  </entry>
+  <entry><id>urn:book:bought</id><title>Bought</title>
+    <link rel="alternate" href="{HOST}/shop/bought" type="text/html"/>
+    <link rel="http://opds-spec.org/progression" href="/progress/bought" type="application/json"/>
   </entry>
 </feed>"#
     )
@@ -90,13 +102,34 @@ fn auth_document() -> String {
     )
 }
 
-/// The canned server: refuses until an `Authorization` arrives, then
-/// answers by path. Records what it saw.
+/// The canned server: refuses until the reader's `Authorization`
+/// arrives, then answers by path. Records what it saw. With
+/// `public_root`, only the search endpoint wants the credential — a
+/// catalog anyone may browse and only members may search. Anything on
+/// [`OTHER`] is another host altogether: open to all, and owed nothing.
 struct Server {
     seen: Mutex<Vec<(String, Option<String>)>>,
+    public_root: bool,
 }
 
 impl Server {
+    fn new() -> Arc<Server> {
+        Arc::new(Server {
+            seen: Mutex::new(Vec::new()),
+            public_root: false,
+        })
+    }
+
+    fn with_public_root() -> Arc<Server> {
+        Arc::new(Server {
+            seen: Mutex::new(Vec::new()),
+            public_root: true,
+        })
+    }
+
+    fn expected_authorization() -> String {
+        chapbook_app::chapbook_reader::chapbook_core::basic_authorization("reader", "secret")
+    }
     fn respond(status: u16, content_type: &str, body: Vec<u8>) -> HttpResponse {
         HttpResponse {
             status,
@@ -121,15 +154,20 @@ impl HttpClient for Server {
         if request.url == "https://down.test/" {
             return Err(HttpError::new("nobody home"));
         }
-        if authorization.is_none() {
+        let atom = "application/atom+xml;profile=opds-catalog";
+        if request.url.starts_with(OTHER) {
+            return Ok(Server::respond(200, atom, section().into_bytes()));
+        }
+        let path = request.url.strip_prefix(HOST).unwrap_or("");
+        let wants_credential = !self.public_root || path.starts_with("/search");
+        if wants_credential && authorization.as_deref() != Some(&*Server::expected_authorization())
+        {
             return Ok(Server::respond(
                 401,
                 "application/opds-authentication+json",
                 auth_document().into_bytes(),
             ));
         }
-        let path = request.url.strip_prefix(HOST).unwrap_or("");
-        let atom = "application/atom+xml;profile=opds-catalog";
         Ok(match path {
             "/page2" => Server::respond(200, atom, page2().into_bytes()),
             "/section" | "/en" | "/fr" => Server::respond(200, atom, section().into_bytes()),
@@ -153,9 +191,7 @@ fn app(dir: &TempDir, server: Arc<Server>) -> App {
 #[test]
 fn a_refused_catalog_becomes_a_login_and_a_sign_in_reaches_the_feed() {
     let dir = TempDir::new("login");
-    let server = Arc::new(Server {
-        seen: Mutex::new(Vec::new()),
-    });
+    let server = Server::new();
     let mut app = app(&dir, server.clone());
     let saved = app.add_catalog(&format!("{HOST}/opds/"), "").expect("add");
     let mut catalog = app.browse(&saved).expect("browse");
@@ -203,7 +239,7 @@ fn a_refused_catalog_becomes_a_login_and_a_sign_in_reaches_the_feed() {
     // and the row from page one still describes its own download — with
     // the sync service resolved against the catalog, not left relative.
     assert!(catalog.load_more().expect("page two"));
-    assert_eq!(catalog.entries().len(), 3);
+    assert_eq!(catalog.entries().len(), 5);
     assert_eq!(catalog.next_page(), None, "page two is the last");
     assert!(!catalog.load_more().expect("nothing more"));
     assert_eq!(catalog.facets().len(), 2, "facets are the first page's");
@@ -259,12 +295,136 @@ fn a_refused_catalog_becomes_a_login_and_a_sign_in_reaches_the_feed() {
     assert!(seen[1..].iter().all(|(_, auth)| auth.is_some()), "{seen:?}");
 }
 
+/// A credential is the origin's it was stored for. A feed may link to a
+/// CDN, an aggregator, another library — and the layer used to send the
+/// reader's password to every one of them, because the client's header
+/// was set once and never cleared.
+#[test]
+fn a_credential_stays_on_the_origin_it_was_stored_for() {
+    let dir = TempDir::new("origin");
+    let server = Server::new();
+    let mut app = app(&dir, server.clone());
+    let saved = app.add_catalog(&format!("{HOST}/opds/"), "").expect("add");
+    let mut catalog = app.browse(&saved).expect("browse");
+    let _ = catalog.go(&saved.url);
+    catalog.sign_in("reader", "secret").expect("signed in");
+    assert!(catalog.load_more().expect("page two"));
+
+    let elsewhere = catalog.entries()[3]
+        .navigation()
+        .map(|link| link.href.clone())
+        .expect("a section on another host");
+    assert!(elsewhere.starts_with(OTHER));
+    catalog
+        .go(&elsewhere)
+        .expect("the other host is open to all");
+    let seen = server.seen.lock().unwrap();
+    let (url, auth) = seen.last().expect("the request was made");
+    assert_eq!(url, &elsewhere);
+    assert_eq!(*auth, None, "the reader's password stayed home");
+    drop(seen);
+
+    // Back on the catalog, the store still has it.
+    assert!(catalog.back());
+    let seen = server.seen.lock().unwrap();
+    assert_eq!(
+        seen.last().unwrap().1,
+        Some(Server::expected_authorization())
+    );
+}
+
+/// A password is kept once the catalog has accepted it, not before:
+/// nothing else that reads the store should send a mistyped one.
+#[test]
+fn a_wrong_password_is_not_kept() {
+    let dir = TempDir::new("wrong");
+    let mut app = app(&dir, Server::new());
+    let saved = app.add_catalog(&format!("{HOST}/opds/"), "").expect("add");
+    let mut catalog = app.browse(&saved).expect("browse");
+    let _ = catalog.go(&saved.url);
+    let key = CredentialKey::http_origin(&saved.url).expect("an origin");
+
+    assert!(catalog.sign_in("reader", "wrong").is_err());
+    assert!(matches!(catalog.state(), BrowseState::Login { .. }));
+    assert!(
+        matches!(
+            app.platform().credentials.get(&key, Freshness::Cached),
+            CredentialLookup::Missing
+        ),
+        "a refused password is not stored"
+    );
+
+    catalog.sign_in("reader", "secret").expect("signed in");
+    assert_eq!(*catalog.state(), BrowseState::Feed);
+    assert!(matches!(
+        app.platform().credentials.get(&key, Freshness::Cached),
+        CredentialLookup::Found(_)
+    ));
+}
+
+/// A search endpoint behind a login, on a catalog anyone may browse: the
+/// refusal is the endpoint's, and signing in runs the search the reader
+/// asked for rather than fetching the feed it was searched from.
+#[test]
+fn a_refused_search_is_signed_into_and_run() {
+    let dir = TempDir::new("search");
+    let server = Server::with_public_root();
+    let mut app = app(&dir, server.clone());
+    let saved = app.add_catalog(&format!("{HOST}/opds/"), "").expect("add");
+    let mut catalog = app.browse(&saved).expect("browse");
+    catalog.go(&saved.url).expect("the root is public");
+    assert!(catalog.has_search());
+
+    assert!(catalog.search("minimal").is_err());
+    match catalog.state() {
+        BrowseState::Login { retry, .. } => {
+            assert!(retry.starts_with(&format!("{HOST}/search")), "{retry}")
+        }
+        other => panic!("expected a login, got {other:?}"),
+    }
+
+    catalog.sign_in("reader", "secret").expect("signed in");
+    assert_eq!(*catalog.state(), BrowseState::Feed);
+    let seen = server.seen.lock().unwrap();
+    let (url, auth) = seen.last().unwrap();
+    assert_eq!(
+        url,
+        &format!("{HOST}/search?q=minimal"),
+        "the search ran, not the root"
+    );
+    assert!(auth.is_some());
+    drop(seen);
+    assert_eq!(catalog.base(), saved.url, "no crumb moved");
+    assert!(!catalog.back());
+}
+
+/// The sync services are the entry's whether or not there is anything
+/// to download: a book sold elsewhere can still say where its reader's
+/// place lives.
+#[test]
+fn sync_targets_are_the_entrys_even_with_nothing_to_download() {
+    let dir = TempDir::new("targets");
+    let mut app = app(&dir, Server::new());
+    let saved = app.add_catalog(&format!("{HOST}/opds/"), "").expect("add");
+    let mut catalog = app.browse(&saved).expect("browse");
+    let _ = catalog.go(&saved.url);
+    catalog.sign_in("reader", "secret").expect("signed in");
+    assert!(catalog.load_more().expect("page two"));
+    assert_eq!(catalog.entries()[4].title, "Bought");
+    assert!(catalog.download(4).is_none(), "nothing to fetch");
+    assert_eq!(
+        catalog.sync_targets(4),
+        (Some(format!("{HOST}/progress/bought")), None),
+        "resolved against the catalog, not left root-relative"
+    );
+    assert_eq!(catalog.sync_targets(0), (None, None));
+    assert_eq!(catalog.sync_targets(99), (None, None));
+}
+
 #[test]
 fn a_dead_host_is_a_failure_the_screen_can_name() {
     let dir = TempDir::new("dead");
-    let server = Arc::new(Server {
-        seen: Mutex::new(Vec::new()),
-    });
+    let server = Server::new();
     let app = app(&dir, server);
     let mut catalog = app.open_catalog().expect("catalog");
     assert!(catalog.go("https://down.test/").is_err());
@@ -285,9 +445,7 @@ fn a_dead_host_is_a_failure_the_screen_can_name() {
 #[test]
 fn the_whole_download_lands_the_book_with_its_services() {
     let dir = TempDir::new("download");
-    let server = Arc::new(Server {
-        seen: Mutex::new(Vec::new()),
-    });
+    let server = Server::new();
     let mut app = app(&dir, server);
     let saved = app
         .add_catalog(&format!("{HOST}/opds/"), "Shelf")

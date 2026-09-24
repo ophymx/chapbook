@@ -5,7 +5,9 @@
 //! fetch that pushes a crumb, Back walks the crumbs before it leaves the
 //! screen, a facet replaces the feed and a page appends to it, a 401 is a
 //! login drawn from the authentication document rather than a failure,
-//! and signing in stores the credential by origin and fetches again. All
+//! and signing in tries again and stores the accepted credential by
+//! origin — the origin's alone: it never rides to a host the feed links
+//! to. All
 //! of that is here now, over the same held-feed accessors the C ABI and
 //! the JNI binding already read.
 //!
@@ -119,6 +121,16 @@ pub struct Catalog {
     auth: Option<AuthDocument>,
     crumbs: Vec<String>,
     state: BrowseState,
+    /// Whether the client's `Authorization` is one this layer set from
+    /// the store — and so one it may clear when the next URL's origin has
+    /// none — rather than one the front end set through
+    /// [`client`](Catalog::client).
+    store_authorized: bool,
+    /// The query a search was refused with a login for, so a sign-in
+    /// runs the search again rather than the feed it was searched from.
+    refused_search: Option<String>,
+    /// A credential a sign-in is trying before the store holds it.
+    pending: Option<String>,
 }
 
 impl Catalog {
@@ -139,6 +151,9 @@ impl Catalog {
             auth: None,
             crumbs: Vec::new(),
             state: BrowseState::Opening,
+            store_authorized: false,
+            refused_search: None,
+            pending: None,
         }
     }
 
@@ -191,7 +206,7 @@ impl Catalog {
     pub fn download(&self, index: usize) -> Option<Download> {
         let entry = self.entries().get(index)?;
         let request = entry.download_request()?;
-        let (progression, container) = chapbook_sync::targets_of(entry);
+        let (progression_url, annotation_container) = self.sync_targets(index);
         Some(Download {
             url: resolve_url(&self.base, &request.url),
             headers: request.headers,
@@ -199,12 +214,28 @@ impl Catalog {
             media_type: request.media_type,
             title: request.title,
             entry_id: request.entry_id,
-            // Resolved again even though the parser already did: a no-op
-            // on an absolute href, and what stops a root-relative service
-            // path reaching the library as a path.
-            progression_url: progression.map(|href| resolve_url(&self.base, &href)),
-            annotation_container: container.map(|href| resolve_url(&self.base, &href)),
+            progression_url,
+            annotation_container,
         })
+    }
+
+    /// The two sync services an entry advertises — its progression
+    /// endpoint and its Web Annotation container — absolute, or `None`
+    /// each where the entry names none. Independent of whether there is
+    /// anything to download: an entry sold elsewhere can still say where
+    /// its reader's place lives.
+    pub fn sync_targets(&self, index: usize) -> (Option<String>, Option<String>) {
+        let Some(entry) = self.entries().get(index) else {
+            return (None, None);
+        };
+        let (progression, container) = chapbook_sync::targets_of(entry);
+        // Resolved again even though the parser already did: a no-op on
+        // an absolute href, and what stops a root-relative service path
+        // reaching the library as a path.
+        (
+            progression.map(|href| resolve_url(&self.base, &href)),
+            container.map(|href| resolve_url(&self.base, &href)),
+        )
     }
 
     /// The held feed's facets, flattened with their group.
@@ -278,6 +309,7 @@ impl Catalog {
                 self.base = url.to_string();
                 self.feed = Some(feed);
                 self.auth = None;
+                self.refused_search = None;
                 self.state = BrowseState::Feed;
                 Ok(())
             }
@@ -324,16 +356,32 @@ impl Catalog {
             return Err(OpdsError::Parse("this catalog offers no search".into()));
         }
         let base = self.base.clone();
-        self.authorize(&base);
+        // The search endpoint is its own URL, and may be its own origin:
+        // the credential and the refusal are both the endpoint's, not the
+        // feed's it was searched from.
+        let endpoint = self
+            .feed
+            .as_ref()
+            .and_then(|feed| feed.search())
+            .map(|link| resolve_url(&base, &link.href))
+            .expect("checked above");
+        self.authorize(&endpoint);
         let feed = self.feed.as_ref().expect("checked above");
         match self.client.search(feed, &base, query) {
             Ok(results) => {
                 self.feed = Some(results);
                 self.auth = None;
+                self.refused_search = None;
                 self.state = BrowseState::Feed;
                 Ok(())
             }
-            Err(e) => Err(self.refused(&base, e)),
+            Err(e) => {
+                let refused = self.refused(&endpoint, e);
+                if matches!(refused, OpdsError::AuthRequired(_)) {
+                    self.refused_search = Some(query.to_string());
+                }
+                Err(refused)
+            }
         }
     }
 
@@ -361,11 +409,15 @@ impl Catalog {
         Ok(true)
     }
 
-    /// Sign in with Basic to the catalog that refused: store the
-    /// credential by the refused URL's origin — never by the URL, whose
-    /// path may be a secret — and fetch it again without moving a crumb.
-    /// A store that cannot hold it (read-only, locked) still signs this
-    /// session in; the reader is asked again next launch.
+    /// Sign in with Basic to the catalog that refused: try the refused
+    /// request again with the credential — the feed, or the search it
+    /// was refused for — and, **once it is accepted**, store it by the
+    /// refused URL's origin, never by the URL, whose path may be a
+    /// secret. A mistyped password is not kept: nothing else that reads
+    /// the store — the sync driver, a cover load, a download job — should
+    /// send it, and a server that counts failures should see one. A
+    /// store that cannot hold it (read-only, locked) still signs this
+    /// session in; the reader is asked again next launch. No crumb moves.
     pub fn sign_in(
         &mut self,
         username: &str,
@@ -376,13 +428,45 @@ impl Catalog {
         };
         let retry = retry.clone();
         let credential = Credential::basic(username, password);
-        if let Some(key) = CredentialKey::http_origin(&retry) {
-            if let Err(e) = self.credentials.store(&key, &credential) {
-                log::warn!("the credential store would not keep the sign-in: {e}");
+        self.client
+            .set_authorization(credential.authorization.clone());
+        self.store_authorized = true;
+        let outcome = match self.refused_search.clone() {
+            Some(query) => self.search_with(&query, &credential),
+            None => self.fetch_with(&retry, &credential),
+        };
+        if outcome.is_ok() {
+            if let Some(key) = CredentialKey::http_origin(&retry) {
+                if let Err(e) = self.credentials.store(&key, &credential) {
+                    log::warn!("the credential store would not keep the sign-in: {e}");
+                }
             }
         }
-        self.client.set_authorization(credential.authorization);
-        self.fetch(&retry)
+        outcome
+    }
+
+    /// A fetch that keeps `credential` on the client rather than asking
+    /// the store, which does not hold it yet.
+    fn fetch_with(
+        &mut self,
+        url: &str,
+        credential: &Credential,
+    ) -> std::result::Result<(), OpdsError> {
+        self.pending = Some(credential.authorization.clone());
+        let outcome = self.fetch(url);
+        self.pending = None;
+        outcome
+    }
+
+    fn search_with(
+        &mut self,
+        query: &str,
+        credential: &Credential,
+    ) -> std::result::Result<(), OpdsError> {
+        self.pending = Some(credential.authorization.clone());
+        let outcome = self.search(query);
+        self.pending = None;
+        outcome
     }
 
     /// The whole job on one thread: fetch the entry's acquisition, import
@@ -419,16 +503,34 @@ impl Catalog {
         imported
     }
 
-    /// Give the client the store's credential for `url`'s origin, when
-    /// there is one. A missing credential leaves whatever the front end
-    /// set through [`client`](Catalog::client) in place, so a host that
-    /// manages its own is not undone by an empty store.
+    /// Give the client the credential for `url`'s origin: the one a
+    /// sign-in is trying, else the store's, when it has one. When it has
+    /// none, a credential this layer set for an *earlier* origin is
+    /// cleared — a feed may link to a CDN, an aggregator, another
+    /// library, and none of them is owed the reader's password for this
+    /// one. What a front end set itself through [`client`](Catalog::client)
+    /// is left in place, so a host that manages its own credential is not
+    /// undone by an empty store.
     fn authorize(&mut self, url: &str) {
+        if let Some(pending) = &self.pending {
+            self.client.set_authorization(pending.clone());
+            self.store_authorized = true;
+            return;
+        }
         let Some(key) = CredentialKey::http_origin(url) else {
             return;
         };
-        if let CredentialLookup::Found(credential) = self.credentials.get(&key, Freshness::Cached) {
-            self.client.set_authorization(credential.authorization);
+        match self.credentials.get(&key, Freshness::Cached) {
+            CredentialLookup::Found(credential) => {
+                self.client.set_authorization(credential.authorization);
+                self.store_authorized = true;
+            }
+            _ => {
+                if self.store_authorized {
+                    self.client.clear_authorization();
+                    self.store_authorized = false;
+                }
+            }
         }
     }
 

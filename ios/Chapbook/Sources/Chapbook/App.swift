@@ -49,8 +49,8 @@ public struct Place: Hashable, Sendable {
     public let spineLength: Int
     public let page: Int
     public let pageCount: Int
-    /// Whole-book progress, 0...1, spine-weighted like the engine's own
-    /// progression.
+    /// Whole-book progress, 0...1, spine-weighted, read through the
+    /// current page — so the last page of the last unit is 1.0.
     public let bookFraction: Double
     /// Pages after this one in the current unit.
     public let pagesLeft: Int
@@ -381,21 +381,41 @@ public final class App {
     /// `drainSyncReports()`; the first one given is the one kept.
     public func syncAll(onWake: (@Sendable () -> Void)? = nil) throws -> Bool {
         var started = false
-        let (wake, user) = wakeArguments(onWake)
-        try check(cb_app_sync_all(raw, wake, user, &started))
+        let box = offer(onWake)
+        do {
+            try check(cb_app_sync_all(raw, box.map { _ in syncWake }, box?.toOpaque(), &started))
+        } catch {
+            box?.release()
+            throw error
+        }
+        // A shelf with nothing to sync starts no driver, and a driver
+        // that was never started never took the box: keep it only once
+        // the engine holds a pointer to it, or the next call would offer
+        // nothing and the driver would start with a wake that does nothing.
+        if started { keep(box) } else { box?.release() }
         return started
     }
 
     public func syncBook(_ book: Int64, onWake: (@Sendable () -> Void)? = nil) throws {
-        let (wake, user) = wakeArguments(onWake)
-        try check(cb_app_sync_book(raw, book, wake, user))
+        let box = offer(onWake)
+        do {
+            try check(cb_app_sync_book(raw, book, box.map { _ in syncWake }, box?.toOpaque()))
+        } catch {
+            box?.release()
+            throw error
+        }
+        keep(box)
     }
 
-    private func wakeArguments(_ onWake: (@Sendable () -> Void)?) -> (cb_wake_fn?, UnsafeMutableRawPointer?) {
-        guard let onWake, waker == nil else { return (nil, nil) }
-        let box = Unmanaged.passRetained(WakerBox(onWake))
-        waker = box
-        return (syncWake, box.toOpaque())
+    /// A box to offer the driver, or `nil` when it already holds one —
+    /// the first wake given when it starts is the one it keeps.
+    private func offer(_ onWake: (@Sendable () -> Void)?) -> Unmanaged<WakerBox>? {
+        guard let onWake, waker == nil else { return nil }
+        return Unmanaged.passRetained(WakerBox(onWake))
+    }
+
+    private func keep(_ box: Unmanaged<WakerBox>?) {
+        if let box { waker = box }
     }
 
     /// Everything sync reported since the last drain, oldest first.
