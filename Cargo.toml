@@ -159,10 +159,11 @@ fontdb = { version = "0.24", default-features = false, features = [
     "fs",
 ] }
 # MathML Core layout: OpenType MATH metrics in, glyphs-and-rules out. Its
-# `svg` feature is a debugging emitter we have no use for. 0.2 carries
-# glyph advances in the display list and probes MATH tables itself, so no
-# font parser rides along anymore.
-formulary = { version = "0.2", default-features = false, features = [
+# `svg` feature is a debugging emitter we have no use for. 0.3 sits on
+# read-fonts, skrifa and harfrust — the stack cosmic-text and usvg already
+# use — but on newer minors than either of them pins, so until they catch
+# up the tree carries an extra copy of each. rustybuzz is gone with it.
+formulary = { version = "0.3", default-features = false, features = [
     "shaping",
 ] }
 
