@@ -200,8 +200,9 @@ stays that way.
   assumed), HTTP Basic at any point in a flow plus OPDS Authentication
   Document login.
   **It opens no sockets.** The caller injects an `HttpClient` — a blocking
-  two-method trait (`get`, `send`) over `HttpRequest`/`HttpResponse` —
-  because a bundled networking stack is what `docs/PLATFORM.md` found costs
+  one-method trait over the `http` crate's `Request` and `Response`, which
+  any closure between the two satisfies — because a bundled networking
+  stack is what `docs/PLATFORM.md` found costs
   an iOS app background transfer, system trust and ATS, costs Android
   `WorkManager`, and is simply unavailable in WASM. `UreqHttp` (blocking
   `ureq` + rustls, no async runtime) is one implementation behind the

@@ -13,111 +13,61 @@
 //! feature. Turning that feature off drops `ureq`, `rustls` and the bundled
 //! root store entirely, and the crate still does everything except open a
 //! socket.
+//!
+//! # The types are the `http` crate's
+//!
+//! A request is [`http::Request`] and a response is [`http::Response`],
+//! not shapes of this crate's own. That is the convention every
+//! transport-agnostic Rust HTTP library has settled on, and it is what
+//! lets two such libraries share one transport without either naming the
+//! other: a closure that maps an `http` request to an `http` response
+//! satisfies this trait *and* any sibling crate's, because both are the
+//! same function type. [`HttpRequest`] and [`HttpResponse`] are aliases,
+//! kept so the seam reads as one thing at the call site.
+//!
+//! The request body is bytes: every write this crate makes is a small
+//! JSON document. The response body is a reader, because an acquisition
+//! download streams through it to disk and a book does not belong in
+//! memory twice.
 
 use std::fmt;
 use std::io::Read;
 use std::sync::Arc;
 
-/// One outgoing request. GET is the only method catalog browsing needs;
-/// the optional `write` feature adds [`HttpClient::send`], which carries one
-/// of these with a method and an optional body.
+pub use ::http::{
+    header, HeaderMap, HeaderName, HeaderValue, Method, Request, Response, StatusCode, Uri,
+};
+
+/// A response body, still unread.
+pub type Body = Box<dyn Read + Send>;
+
+/// One outgoing request. The method is in it — GET for everything a
+/// catalog browser does, PUT for a position, and whatever a sibling
+/// protocol needs — so a transport implements one door, not one per verb.
 ///
-/// Owned rather than borrowed on purpose: an implementation is as likely to
-/// be a thin shim over a foreign runtime — `URLSession`, OkHttp, `fetch` —
-/// as it is to be Rust all the way down, and lifetimes do not survive that
-/// trip.
-pub struct HttpRequest {
-    pub url: String,
-    /// Header name/value pairs, already assembled. Send them as given:
-    /// `Accept` carries exactly one media type and never a q-value, because
-    /// real catalog servers negotiate by naive substring match (interop doc
-    /// §1). Rewriting or merging headers will break servers in the wild.
-    pub headers: Vec<(String, String)>,
-}
-
-impl HttpRequest {
-    pub fn new(url: impl Into<String>) -> Self {
-        HttpRequest {
-            url: url.into(),
-            headers: Vec::new(),
-        }
-    }
-
-    pub fn header(mut self, name: impl Into<String>, value: impl Into<String>) -> Self {
-        self.headers.push((name.into(), value.into()));
-        self
-    }
-}
-
-/// The methods a write flow uses. GET is not here: it is
-/// [`HttpClient::get`], which every transport implements and which needs no
-/// body.
-#[cfg(feature = "write")]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum HttpMethod {
-    Post,
-    Put,
-    Delete,
-}
-
-#[cfg(feature = "write")]
-impl HttpMethod {
-    /// The token to put on the request line, for transports that take the
-    /// method as a string.
-    pub fn as_str(self) -> &'static str {
-        match self {
-            HttpMethod::Post => "POST",
-            HttpMethod::Put => "PUT",
-            HttpMethod::Delete => "DELETE",
-        }
-    }
-}
-
-#[cfg(feature = "write")]
-impl fmt::Display for HttpMethod {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
+/// Headers must be sent as given: `Accept` carries exactly one media type
+/// and never a q-value, because real catalog servers negotiate by naive
+/// substring match (interop doc §1). Rewriting or merging headers will
+/// break servers in the wild.
+///
+/// Owned rather than borrowed on purpose: an implementation is as likely
+/// to be a thin shim over a foreign runtime — `URLSession`, OkHttp,
+/// `fetch` — as it is to be Rust all the way down, and lifetimes do not
+/// survive that trip.
+pub type HttpRequest = Request<Vec<u8>>;
 
 /// One response, with its body still unread.
-pub struct HttpResponse {
-    /// The real status, including 4xx and 5xx — see [`HttpClient::get`].
-    pub status: u16,
-    /// The `Content-Type` header verbatim, parameters and all. This is
-    /// authoritative over whatever the caller asked for or a link advertised.
-    pub content_type: Option<String>,
-    /// Every other response header, name and value as received.
-    ///
-    /// Separate from `content_type` because that one is load-bearing for
-    /// every flow and deserves to be unmissable; these are needed by the
-    /// flows that write. A Web Annotation container carries its whole
-    /// concurrency story in `ETag` and says where it put a new annotation
-    /// in `Location`, so a transport that discards headers makes safe
-    /// concurrent editing impossible.
-    ///
-    /// A transport may pass all headers or only the ones it can cheaply
-    /// enumerate; a missing header is read as absent, never as empty.
-    /// Duplicates are kept in order rather than joined — the caller that
-    /// cares about a repeated header knows how it wants it folded.
-    pub headers: Vec<(String, String)>,
-    pub body: Box<dyn Read + Send>,
-}
-
-impl HttpResponse {
-    /// A header by case-insensitive name, as HTTP requires.
-    pub fn header(&self, name: &str) -> Option<&str> {
-        if name.eq_ignore_ascii_case("content-type") {
-            if let Some(content_type) = &self.content_type {
-                return Some(content_type);
-            }
-        }
-        self.headers
-            .iter()
-            .find(|(header, _)| header.eq_ignore_ascii_case(name))
-            .map(|(_, value)| value.as_str())
-    }
-}
+///
+/// The status is the real one, 4xx and 5xx included — see
+/// [`HttpClient::send`]. `Content-Type` is authoritative over whatever the
+/// caller asked for or a link advertised. The other headers matter to the
+/// flows that write: a Web Annotation container carries its whole
+/// concurrency story in `ETag` and says where it put a new annotation in
+/// `Location`, so a transport that discards headers makes safe concurrent
+/// editing impossible. A transport may pass all headers or only the ones
+/// it can cheaply enumerate; a missing header is read as absent, never as
+/// empty.
+pub type HttpResponse = Response<Body>;
 
 /// A transport failure: the request never produced a response. A server that
 /// answered with 404 or 500 did *not* fail — that is an [`HttpResponse`].
@@ -138,6 +88,12 @@ impl fmt::Display for HttpError {
 
 impl std::error::Error for HttpError {}
 
+impl From<::http::Error> for HttpError {
+    fn from(error: ::http::Error) -> Self {
+        HttpError::new(error)
+    }
+}
+
 /// A blocking HTTP transport.
 ///
 /// Blocking by contract, not by accident: OPDS page streaming backs a
@@ -147,6 +103,11 @@ impl std::error::Error for HttpError {}
 ///
 /// `Send + Sync` because a streamed comic is shared across threads.
 ///
+/// Any closure from [`HttpRequest`] to [`HttpResponse`] is one of these,
+/// so a host that already owns a client injects a lambda rather than
+/// naming a type; a shared [`Arc`] of one is one too, because a host that
+/// owns its networking owns *one* of it.
+///
 /// ## What an implementation must do
 ///
 /// - **Return 4xx and 5xx as responses, not errors.** A 401's body is the
@@ -155,7 +116,12 @@ impl std::error::Error for HttpError {}
 ///   collapses error statuses makes that impossible.
 /// - **Follow redirects, including cross-host ones.** Catalogs relocate
 ///   acquisitions onto CDNs.
-/// - **Send the given headers unaltered**, per [`HttpRequest::headers`].
+/// - **Send the given headers unaltered**, per [`HttpRequest`].
+/// - **Send the method it is given.** A transport that only reads — a
+///   catalog browser, a WASM build that only downloads — refuses anything
+///   but GET with an error rather than pretending: a write that vanishes
+///   looks to a reader exactly like a position that syncs and is never
+///   stored.
 /// - **Not retry on its own.** Auth retry is the caller's flow.
 ///
 /// ## What belongs here rather than in the credential
@@ -169,43 +135,21 @@ impl std::error::Error for HttpError {}
 /// credential store's. Keeping that line means the credential stays opaque
 /// bytes all the way out to a host.
 pub trait HttpClient: Send + Sync {
-    fn get(&self, request: HttpRequest) -> Result<HttpResponse, HttpError>;
+    fn send(&self, request: HttpRequest) -> Result<HttpResponse, HttpError>;
+}
 
-    /// Send a request that is not a GET, returning the response — added by
-    /// the `write` feature, which the flows that change server state turn
-    /// on.
-    ///
-    /// **One method rather than one per verb.** A host implements its
-    /// transport once, and every write flow here — a position PUT, an
-    /// annotation POST, PUT or DELETE — arrives through the same door. The
-    /// alternative, a gated method per verb, makes a host implement four
-    /// nearly identical shims and makes each new flow a new trait method.
-    ///
-    /// `body` is `None` for a request that has none; a DELETE with a body
-    /// is not something this crate sends.
-    ///
-    /// The default refuses rather than pretending to succeed. Unlike a
-    /// fetch-to-file, this cannot be built out of
-    /// [`get`](HttpClient::get), and a transport that silently dropped the
-    /// write would look to a caller exactly like a reader whose position
-    /// syncs and is never stored. Existing transports keep compiling and
-    /// report the truth: they do not do this.
-    ///
-    /// An implementation must send the headers as given — the caller has
-    /// already set `Content-Type`, `Accept` and any `If-Match` — and must
-    /// return 4xx as responses, since these protocols carry their meaning
-    /// in 400/403/409/412.
-    #[cfg(feature = "write")]
-    fn send(
-        &self,
-        method: HttpMethod,
-        request: HttpRequest,
-        body: Option<Vec<u8>>,
-    ) -> Result<HttpResponse, HttpError> {
-        let _ = (request, body);
-        Err(HttpError::new(format!(
-            "this HttpClient does not implement {method}, which this flow requires"
-        )))
+/// A function is a transport.
+///
+/// This is the impl that makes the seam cheap for a host: whatever error
+/// its own client produces is carried as the message, so no host has to
+/// learn this crate's error type to hand a request to `URLSession`.
+impl<F, E> HttpClient for F
+where
+    F: Fn(HttpRequest) -> Result<HttpResponse, E> + Send + Sync,
+    E: fmt::Display,
+{
+    fn send(&self, request: HttpRequest) -> Result<HttpResponse, HttpError> {
+        self(request).map_err(HttpError::new)
     }
 }
 
@@ -219,17 +163,42 @@ pub trait HttpClient: Send + Sync {
 /// `OpdsClient` per authentication attempt, so without this the retry path
 /// would have to construct a second transport to re-send one request.
 impl<T: HttpClient + ?Sized> HttpClient for Arc<T> {
-    fn get(&self, request: HttpRequest) -> Result<HttpResponse, HttpError> {
-        (**self).get(request)
+    fn send(&self, request: HttpRequest) -> Result<HttpResponse, HttpError> {
+        (**self).send(request)
     }
+}
 
-    #[cfg(feature = "write")]
-    fn send(
-        &self,
-        method: HttpMethod,
-        request: HttpRequest,
-        body: Option<Vec<u8>>,
-    ) -> Result<HttpResponse, HttpError> {
-        (**self).send(method, request, body)
+/// A response header as text, by name. `None` when the header is absent
+/// or its bytes are not text — a value this crate has no way to use is
+/// read as not there, which beats a lossy conversion.
+pub fn header_str(headers: &HeaderMap, name: HeaderName) -> Option<&str> {
+    headers.get(name).and_then(|value| value.to_str().ok())
+}
+
+/// A response with its body drained: what every flow here wants, since
+/// the body is a reader and each caller wants the same three things out
+/// of it.
+pub struct Settled {
+    pub status: u16,
+    pub headers: HeaderMap,
+    pub body: Vec<u8>,
+}
+
+impl Settled {
+    /// The `Content-Type` verbatim, parameters and all.
+    pub fn content_type(&self) -> Option<&str> {
+        header_str(&self.headers, header::CONTENT_TYPE)
     }
+}
+
+/// Read a response to the end.
+pub fn settle(response: HttpResponse) -> std::io::Result<Settled> {
+    let (parts, mut reader) = response.into_parts();
+    let mut body = Vec::new();
+    reader.read_to_end(&mut body)?;
+    Ok(Settled {
+        status: parts.status.as_u16(),
+        headers: parts.headers,
+        body,
+    })
 }

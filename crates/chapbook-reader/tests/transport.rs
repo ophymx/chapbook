@@ -15,7 +15,10 @@ use std::sync::{Arc, Mutex};
 use chapbook_core::{
     Credential, CredentialKey, CredentialLookup, CredentialStore, Freshness, NoCredentials,
 };
-use chapbook_reader::{HttpClient, HttpError, HttpRequest, HttpResponse, Session, SessionConfig};
+use chapbook_reader::chapbook_opds::http::{header, Response};
+use chapbook_reader::{
+    Body, HttpClient, HttpError, HttpRequest, HttpResponse, Session, SessionConfig,
+};
 
 const HOST: &str = "https://comics.example.com";
 const STALE: &str = "Bearer stale-token";
@@ -59,29 +62,31 @@ impl PickyHttp {
     }
 }
 
+fn respond(status: u16, content_type: &str, body: Vec<u8>) -> HttpResponse {
+    Response::builder()
+        .status(status)
+        .header(header::CONTENT_TYPE, content_type)
+        .body(Box::new(Cursor::new(body)) as Body)
+        .expect("a well-formed canned response")
+}
+
 impl HttpClient for PickyHttp {
-    fn get(&self, request: HttpRequest) -> Result<HttpResponse, HttpError> {
+    fn send(&self, request: HttpRequest) -> Result<HttpResponse, HttpError> {
         let offered = request
-            .headers
-            .iter()
-            .find(|(name, _)| name.eq_ignore_ascii_case("Authorization"))
-            .map(|(_, value)| value.clone());
+            .headers()
+            .get(header::AUTHORIZATION)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_string);
         self.0.seen.lock().unwrap().push(offered.clone());
 
         if offered.as_deref() != Some(FRESH) {
-            return Ok(HttpResponse {
-                status: 401,
-                content_type: Some("application/opds-authentication+json".into()),
-                headers: Vec::new(),
-                body: Box::new(Cursor::new(AUTH_DOC.as_bytes().to_vec())),
-            });
+            return Ok(respond(
+                401,
+                "application/opds-authentication+json",
+                AUTH_DOC.as_bytes().to_vec(),
+            ));
         }
-        Ok(HttpResponse {
-            status: 200,
-            content_type: Some("application/atom+xml".into()),
-            headers: Vec::new(),
-            body: Box::new(Cursor::new(feed().into_bytes())),
-        })
+        Ok(respond(200, "application/atom+xml", feed().into_bytes()))
     }
 }
 

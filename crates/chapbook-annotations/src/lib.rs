@@ -7,8 +7,9 @@
 //!   Model as a reading app needs it, and chapbook's layered locator
 //!   serialized into a selector stack. No networking, no library.
 //! - [`container`] is the **protocol**: create, update, delete and list
-//!   against a Web Annotation Protocol container, over the same injected
-//!   `HttpClient` the catalog uses.
+//!   against a Web Annotation Protocol container, over an injected
+//!   [`HttpClient`] — this crate's own trait, over the `http` crate's
+//!   types, so the one closure a host writes serves the catalog too.
 //!
 //! # Two rules this crate is built around
 //!
@@ -24,10 +25,14 @@
 //! clients — see [`mapping`]'s docs.
 
 pub mod container;
+pub mod http;
 pub mod mapping;
 pub mod model;
 
 pub use container::{AnnotationContainer, ContainerError, Listing, StoredAnnotation};
+#[cfg(feature = "ureq")]
+pub use http::UreqHttp;
+pub use http::{basic_authorization, Body, HttpClient, HttpError, HttpRequest, HttpResponse};
 pub use mapping::{from_annotation, to_annotation, Mark};
 pub use model::{Annotation, Selector, Target, CFI_CONFORMS_TO, CONTEXT, MEDIA_TYPE};
 

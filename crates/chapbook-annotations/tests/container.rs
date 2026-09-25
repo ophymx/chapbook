@@ -6,9 +6,11 @@ use std::io::Cursor;
 use std::sync::{Arc, Mutex};
 
 use chapbook_annotations::container::AnnotationContainer;
+use chapbook_annotations::http::{
+    header, Body, HttpClient, HttpError, HttpRequest, HttpResponse, Method, Response,
+};
 use chapbook_annotations::model::Annotation;
 use chapbook_annotations::ContainerError;
-use opds_client::http::{HttpClient, HttpError, HttpMethod, HttpRequest, HttpResponse};
 use serde_json::json;
 
 const HOST: &str = "https://library.example.com";
@@ -55,13 +57,22 @@ impl FakeHttp {
         self.0.seen.lock().unwrap().clone()
     }
 
-    fn serve(&self, method: &str, request: &HttpRequest, body: Vec<u8>) -> HttpResponse {
-        let path = request.url.trim_start_matches(HOST).to_string();
+    fn serve(&self, request: &HttpRequest) -> HttpResponse {
+        let method = request.method().to_string();
+        let path = request
+            .uri()
+            .to_string()
+            .trim_start_matches(HOST)
+            .to_string();
         self.0.seen.lock().unwrap().push((
-            method.to_string(),
+            method.clone(),
             path.clone(),
-            request.headers.clone(),
-            String::from_utf8_lossy(&body).into_owned(),
+            request
+                .headers()
+                .iter()
+                .filter_map(|(n, v)| Some((n.to_string(), v.to_str().ok()?.to_string())))
+                .collect(),
+            String::from_utf8_lossy(request.body()).into_owned(),
         ));
         match self
             .0
@@ -70,34 +81,28 @@ impl FakeHttp {
             .unwrap()
             .get(&format!("{method} {path}"))
         {
-            Some((status, headers, body)) => HttpResponse {
-                status: *status,
-                content_type: Some("application/ld+json".into()),
-                headers: headers.clone(),
-                body: Box::new(Cursor::new(body.clone().into_bytes())),
-            },
-            None => HttpResponse {
-                status: 404,
-                content_type: None,
-                headers: Vec::new(),
-                body: Box::new(Cursor::new(Vec::new())),
-            },
+            Some((status, headers, body)) => {
+                let mut response = Response::builder()
+                    .status(*status)
+                    .header(header::CONTENT_TYPE, "application/ld+json");
+                for (name, value) in headers {
+                    response = response.header(name.as_str(), value.as_str());
+                }
+                response
+                    .body(Box::new(Cursor::new(body.clone().into_bytes())) as Body)
+                    .unwrap()
+            }
+            None => Response::builder()
+                .status(404)
+                .body(Box::new(Cursor::new(Vec::new())) as Body)
+                .unwrap(),
         }
     }
 }
 
 impl HttpClient for FakeHttp {
-    fn get(&self, request: HttpRequest) -> Result<HttpResponse, HttpError> {
-        Ok(self.serve("GET", &request, Vec::new()))
-    }
-
-    fn send(
-        &self,
-        method: HttpMethod,
-        request: HttpRequest,
-        body: Option<Vec<u8>>,
-    ) -> Result<HttpResponse, HttpError> {
-        Ok(self.serve(method.as_str(), &request, body.unwrap_or_default()))
+    fn send(&self, request: HttpRequest) -> Result<HttpResponse, HttpError> {
+        Ok(self.serve(&request))
     }
 }
 
@@ -407,12 +412,20 @@ fn the_page_limit_is_honoured() {
 }
 
 /// A transport that cannot write says so rather than reporting success.
+/// There is one method on the trait, so "cannot write" is a transport
+/// refusing by verb — which is what the trait asks of a read-only host.
 #[test]
 fn a_read_only_transport_refuses_the_write_instead_of_dropping_it() {
     struct GetOnly;
     impl HttpClient for GetOnly {
-        fn get(&self, _: HttpRequest) -> Result<HttpResponse, HttpError> {
-            unreachable!("the flow under test never gets this far")
+        fn send(&self, request: HttpRequest) -> Result<HttpResponse, HttpError> {
+            if request.method() == Method::GET {
+                unreachable!("the flow under test never gets this far");
+            }
+            Err(HttpError::new(format!(
+                "read-only transport cannot {}",
+                request.method()
+            )))
         }
     }
     match AnnotationContainer::new(GetOnly).create(

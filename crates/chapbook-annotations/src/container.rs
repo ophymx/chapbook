@@ -13,16 +13,17 @@
 //!
 //! # The transport
 //!
-//! `opds_client::HttpClient`, the same one the catalog uses, because a host
-//! implements its networking once. Writes go through `HttpClient::send`
-//! (the `write` feature), whose default refuses rather than pretending —
-//! see that trait's docs for why a silently dropped write is the worst
-//! outcome available.
+//! [`HttpClient`], this crate's own declaration of what it needs, over
+//! the `http` crate's request and response — so the closure a host wrote
+//! for its catalog client serves here unchanged. A transport that cannot
+//! write must refuse rather than pretend; see that trait's docs for why a
+//! silently dropped write is the worst outcome available.
 
 use std::io::Read;
 
-use opds_client::http::{HttpClient, HttpMethod, HttpRequest};
-
+use crate::http::{
+    header, HeaderMap, HeaderValue, HttpClient, HttpRequest, HttpResponse, Method, Request,
+};
 use crate::model::{Annotation, MEDIA_TYPE};
 
 /// What went wrong, in the vocabulary the caller has to act on.
@@ -92,12 +93,12 @@ pub struct StoredAnnotation {
     pub annotation: Annotation,
 }
 
-/// A response with its body already drained — what the write helper hands
-/// back, since `HttpResponse`'s body is not `Clone` and each caller wants
+/// A response with its body already drained — what every request here
+/// hands back, since a response body is a reader and each caller wants
 /// the same three things out of it.
 struct RawResponse {
     status: u16,
-    headers: Vec<(String, String)>,
+    headers: HeaderMap,
     body: Vec<u8>,
 }
 
@@ -135,7 +136,7 @@ impl AnnotationContainer {
     /// The bundled desktop transport.
     #[cfg(feature = "ureq")]
     pub fn with_ureq() -> Self {
-        Self::new(opds_client::UreqHttp::new())
+        Self::new(crate::http::UreqHttp::new())
     }
 
     /// An opaque `Authorization` header value — the same contract as the
@@ -147,7 +148,7 @@ impl AnnotationContainer {
 
     /// HTTP Basic, the convenience form of the same opaque header.
     pub fn set_basic_auth(&mut self, username: &str, password: &str) {
-        self.set_authorization(opds_client::basic_authorization(username, password));
+        self.set_authorization(crate::http::basic_authorization(username, password));
     }
 
     pub fn clear_authorization(&mut self) {
@@ -166,15 +167,13 @@ impl AnnotationContainer {
     ) -> Result<StoredAnnotation, ContainerError> {
         let body = serde_json::to_vec(annotation)
             .map_err(|e| ContainerError::Parse(format!("serialize annotation: {e}")))?;
-        let request = self
-            .request(container_url)
-            .header("Content-Type", MEDIA_TYPE);
-        let response = self.send(HttpMethod::Post, request, Some(body))?;
+        let request = self.request(Method::POST, container_url, &[], body)?;
+        let response = self.send(request)?;
         let (status, headers, body) = (response.status, response.headers, response.body);
         if !(200..300).contains(&status) {
             return Err(self.classify(status, &body));
         }
-        let iri = header(&headers, "location")
+        let iri = header(&headers, header::LOCATION)
             .or_else(|| {
                 serde_json::from_slice::<Annotation>(&body)
                     .ok()
@@ -187,25 +186,17 @@ impl AnnotationContainer {
             })?;
         Ok(StoredAnnotation {
             iri: resolve(container_url, &iri),
-            etag: header(&headers, "etag"),
+            etag: header(&headers, header::ETAG),
             annotation: parse_or(&body, annotation),
         })
     }
 
     /// Read one annotation, with the entity tag needed to write it back.
     pub fn get(&self, iri: &str) -> Result<StoredAnnotation, ContainerError> {
-        let request = self.request(iri);
-        let mut response = self
-            .http
-            .get(request)
-            .map_err(|e| ContainerError::Network(e.to_string()))?;
-        let status = response.status;
-        let etag = response.header("ETag").map(str::to_string);
-        let mut body = Vec::new();
-        response
-            .body
-            .read_to_end(&mut body)
-            .map_err(|e| ContainerError::Network(format!("read body: {e}")))?;
+        let request = self.request(Method::GET, iri, &[], Vec::new())?;
+        let response = self.send(request)?;
+        let (status, headers, body) = (response.status, response.headers, response.body);
+        let etag = header(&headers, header::ETAG);
         if !(200..300).contains(&status) {
             return Err(self.classify(status, &body));
         }
@@ -230,18 +221,19 @@ impl AnnotationContainer {
     ) -> Result<StoredAnnotation, ContainerError> {
         let body = serde_json::to_vec(annotation)
             .map_err(|e| ContainerError::Parse(format!("serialize annotation: {e}")))?;
-        let mut request = self.request(iri).header("Content-Type", MEDIA_TYPE);
-        if let Some(etag) = etag {
-            request = request.header("If-Match", etag);
-        }
-        let response = self.send(HttpMethod::Put, request, Some(body))?;
+        let guard: &[(_, &str)] = match etag {
+            Some(etag) => &[(header::IF_MATCH, etag)],
+            None => &[],
+        };
+        let request = self.request(Method::PUT, iri, guard, body)?;
+        let response = self.send(request)?;
         let (status, headers, body) = (response.status, response.headers, response.body);
         if !(200..300).contains(&status) {
             return Err(self.classify(status, &body));
         }
         Ok(StoredAnnotation {
             iri: iri.to_string(),
-            etag: header(&headers, "etag"),
+            etag: header(&headers, header::ETAG),
             annotation: parse_or(&body, annotation),
         })
     }
@@ -252,11 +244,12 @@ impl AnnotationContainer {
     /// A 404 is [`Ok`]: something else already deleted it, and the caller's
     /// intent — that it not be there — holds.
     pub fn delete(&self, iri: &str, etag: Option<&str>) -> Result<(), ContainerError> {
-        let mut request = self.request(iri);
-        if let Some(etag) = etag {
-            request = request.header("If-Match", etag);
-        }
-        let response = self.send(HttpMethod::Delete, request, None)?;
+        let guard: &[(_, &str)] = match etag {
+            Some(etag) => &[(header::IF_MATCH, etag)],
+            None => &[],
+        };
+        let request = self.request(Method::DELETE, iri, guard, Vec::new())?;
+        let response = self.send(request)?;
         if (200..300).contains(&response.status) || response.status == 404 {
             return Ok(());
         }
@@ -371,59 +364,70 @@ impl AnnotationContainer {
     /// anything expecting objects, and looks exactly like an empty
     /// container. [`AnnotationContainer::page`] fetches them one by one if
     /// it happens anyway; this is what stops it being needed.
-    fn container_request(&self, url: &str) -> HttpRequest {
-        self.request(url).header(
-            "Prefer",
-            "return=representation; \
-             include=\"http://www.w3.org/ns/oa#PreferContainedDescriptions\"",
-        )
+    fn container_request(&self, url: &str) -> Result<HttpRequest, ContainerError> {
+        const PREFER: &str = "return=representation; \
+                              include=\"http://www.w3.org/ns/oa#PreferContainedDescriptions\"";
+        let prefer = http::HeaderName::from_static("prefer");
+        self.request(Method::GET, url, &[(prefer, PREFER)], Vec::new())
     }
 
-    fn request(&self, url: &str) -> HttpRequest {
-        let mut request = HttpRequest::new(url).header("Accept", MEDIA_TYPE);
-        if let Some(authorization) = &self.authorization {
-            request = request.header("Authorization", authorization);
+    /// Assemble one request: `Accept` for the annotation media type, the
+    /// credential when one is set, `Content-Type` when there is a body,
+    /// and whatever else the flow adds.
+    ///
+    /// `Err` is an IRI the `http` crate will not carry. A container that
+    /// minted one is broken in a way no transport could fix.
+    fn request(
+        &self,
+        method: Method,
+        url: &str,
+        extra: &[(http::HeaderName, &str)],
+        body: Vec<u8>,
+    ) -> Result<HttpRequest, ContainerError> {
+        let mut builder = Request::builder()
+            .method(method)
+            .uri(url)
+            .header(header::ACCEPT, MEDIA_TYPE);
+        if !body.is_empty() {
+            builder = builder.header(header::CONTENT_TYPE, MEDIA_TYPE);
         }
-        request
+        if let Some(authorization) = &self.authorization {
+            // `from_bytes`: the credential is opaque and may carry obs-text
+            // a strict parse would refuse.
+            let value = HeaderValue::from_bytes(authorization.as_bytes())
+                .map_err(|e| ContainerError::Network(format!("authorization header: {e}")))?;
+            builder = builder.header(header::AUTHORIZATION, value);
+        }
+        for (name, value) in extra {
+            builder = builder.header(name.clone(), *value);
+        }
+        builder
+            .body(body)
+            .map_err(|e| ContainerError::Network(format!("cannot request {url}: {e}")))
     }
 
     fn fetch_json(&self, url: &str) -> Result<serde_json::Value, ContainerError> {
-        let mut response = self
-            .http
-            .get(self.container_request(url))
-            .map_err(|e| ContainerError::Network(e.to_string()))?;
-        let status = response.status;
-        let mut body = Vec::new();
-        response
-            .body
-            .read_to_end(&mut body)
-            .map_err(|e| ContainerError::Network(format!("read body: {e}")))?;
-        if !(200..300).contains(&status) {
-            return Err(self.classify(status, &body));
+        let response = self.send(self.container_request(url)?)?;
+        if !(200..300).contains(&response.status) {
+            return Err(self.classify(response.status, &response.body));
         }
-        serde_json::from_slice(&body).map_err(|e| ContainerError::Parse(format!("container: {e}")))
+        serde_json::from_slice(&response.body)
+            .map_err(|e| ContainerError::Parse(format!("container: {e}")))
     }
 
-    fn send(
-        &self,
-        method: HttpMethod,
-        request: HttpRequest,
-        body: Option<Vec<u8>>,
-    ) -> Result<RawResponse, ContainerError> {
-        let mut response = self
+    fn send(&self, request: HttpRequest) -> Result<RawResponse, ContainerError> {
+        let response: HttpResponse = self
             .http
-            .send(method, request, body)
+            .send(request)
             .map_err(|e| ContainerError::Network(e.to_string()))?;
-        let status = response.status;
-        let headers = std::mem::take(&mut response.headers);
+        let (parts, mut reader) = response.into_parts();
         let mut body = Vec::new();
-        response
-            .body
+        reader
             .read_to_end(&mut body)
             .map_err(|e| ContainerError::Network(format!("read body: {e}")))?;
         Ok(RawResponse {
-            status,
-            headers,
+            status: parts.status.as_u16(),
+            headers: parts.headers,
             body,
         })
     }
@@ -453,13 +457,22 @@ fn parse_or(body: &[u8], sent: &Annotation) -> Annotation {
     serde_json::from_slice(body).unwrap_or_else(|_| sent.clone())
 }
 
-fn header(headers: &[(String, String)], name: &str) -> Option<String> {
+/// A response header as text. `None` when absent or not text — a value
+/// this crate cannot use is read as not there.
+fn header(headers: &HeaderMap, name: http::HeaderName) -> Option<String> {
     headers
-        .iter()
-        .find(|(n, _)| n.eq_ignore_ascii_case(name))
-        .map(|(_, v)| v.clone())
+        .get(name)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_string)
 }
 
+/// Resolve an IRI a container handed back against the URL it came from.
+/// Containers are allowed relative `Location` and `next` values; a value
+/// neither side can parse is passed through as given, which is at least
+/// the same string the container will recognise.
 fn resolve(base: &str, href: &str) -> String {
-    opds_client::resolve_url(base, href)
+    match url::Url::parse(base).and_then(|base| base.join(href)) {
+        Ok(url) => url.to_string(),
+        Err(_) => href.to_string(),
+    }
 }

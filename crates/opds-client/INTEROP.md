@@ -199,7 +199,8 @@ here. What the code commits to:
   progression with no special case. The draft's `properties.authenticate`
   link hint, which would save a round-trip, is deliberately not modelled —
   it would mean putting draft-shaped fields on the ungated `Link`.
-- **`PUT` is the crate's only write.** It arrives as `HttpClient::put`,
-  gated on the same feature, with a default that refuses rather than
-  silently dropping the body — a write that vanishes looks to a reader
-  exactly like a position that syncs and never persists.
+- **`PUT` is the crate's only write,** and it goes through the same
+  `HttpClient::send` as every GET, with the method on the request. A
+  transport that only reads must refuse it rather than silently drop the
+  body — a write that vanishes looks to a reader exactly like a position
+  that syncs and never persists.

@@ -5,11 +5,10 @@
 //! Everything here is protocol, not networking — bytes arrive through an
 //! injected [`HttpClient`] (see `crate::http` for why).
 
-use std::io::Read;
 use std::path::Path;
 
 use crate::atom::parse_atom;
-use crate::http::{HttpClient, HttpRequest};
+use crate::http::{header, settle, HeaderValue, HttpClient, HttpRequest, Request};
 use crate::model::{AuthDocument, Feed, Link, MediaType};
 use crate::opds2::{parse_opds2, parse_opds2_publication};
 use crate::OpdsError;
@@ -119,7 +118,7 @@ impl OpdsClient {
 
     /// Download an acquisition to `dest`, complete or not at all.
     ///
-    /// Fetches through [`get`](HttpClient::get) and streams the body into
+    /// Fetches through [`HttpClient::send`] and streams the body into
     /// a sibling `.part` file, syncs it, then renames — so a reader never
     /// opens a half-written book, and an interrupted download leaves
     /// nothing behind. No Range resume is assumed: an interrupted
@@ -138,23 +137,25 @@ impl OpdsClient {
     /// describes the fetch and the host performs it. The
     /// [`download`](crate::download) module has the trade in full.
     pub fn download(&self, url: &str, dest: &Path) -> Result<(), OpdsError> {
-        let mut response = self
+        let response = self
             .http
-            .get(self.request(url, "*/*"))
+            .send(self.request(url, "*/*")?)
             .map_err(|e| OpdsError::Network(e.to_string()))?;
-        if response.status == 401 {
+        let status = response.status().as_u16();
+        if status == 401 {
             // No Authentication Document here: a download 401 is a
             // retry-with-credentials signal rather than a login prompt,
             // and the body on this path is not one.
             return Err(OpdsError::AuthRequired(None));
         }
-        if !(200..300).contains(&response.status) {
-            return Err(OpdsError::Http(response.status));
+        if !(200..300).contains(&status) {
+            return Err(OpdsError::Http(status));
         }
+        let mut body = response.into_body();
         let tmp = dest.with_extension("part");
         let copy = (|| -> std::io::Result<()> {
             let mut file = std::fs::File::create(&tmp)?;
-            std::io::copy(&mut response.body, &mut file)?;
+            std::io::copy(&mut body, &mut file)?;
             file.sync_all()
         })();
         if let Err(e) = copy {
@@ -191,14 +192,26 @@ impl OpdsClient {
         &*self.http
     }
 
-    /// Assemble a request: one Accept media type, no q-values (interop doc
-    /// §1), plus credentials when the caller has set them.
-    pub(crate) fn request(&self, url: &str, accept: &str) -> HttpRequest {
-        let request = HttpRequest::new(url).header("Accept", accept);
-        match &self.authorization {
-            Some(auth) => request.header("Authorization", auth),
-            None => request,
+    /// Assemble a GET: one Accept media type, no q-values (interop doc
+    /// §1), plus credentials when the caller has set them. A flow that
+    /// writes changes the method and adds a body on what comes back.
+    ///
+    /// `Err` is a URL the `http` crate will not carry — a catalog href
+    /// with an unencoded space, say. That was a transport error before
+    /// too (every real client parses the URL); now it is the same error
+    /// from every transport, and named.
+    pub(crate) fn request(&self, url: &str, accept: &str) -> Result<HttpRequest, OpdsError> {
+        let mut builder = Request::get(url).header(header::ACCEPT, accept);
+        if let Some(auth) = &self.authorization {
+            // `from_bytes` rather than a `&str`: a credential is opaque and
+            // may carry obs-text a strict parse would refuse.
+            let value = HeaderValue::from_bytes(auth.as_bytes())
+                .map_err(|e| OpdsError::Network(format!("authorization header: {e}")))?;
+            builder = builder.header(header::AUTHORIZATION, value);
         }
+        builder
+            .body(Vec::new())
+            .map_err(|e| OpdsError::Network(format!("cannot request {url}: {e}")))
     }
 
     pub(crate) fn get(
@@ -206,29 +219,25 @@ impl OpdsClient {
         url: &str,
         accept: &str,
     ) -> Result<(Vec<u8>, Option<String>), OpdsError> {
-        let mut response = self
+        let response = self
             .http
-            .get(self.request(url, accept))
+            .send(self.request(url, accept)?)
             .map_err(|e| OpdsError::Network(e.to_string()))?;
-        let status = response.status;
-        let content_type = response.content_type.clone();
-        let mut body = Vec::new();
-        response
-            .body
-            .read_to_end(&mut body)
-            .map_err(|e| OpdsError::Network(format!("read body: {e}")))?;
+        let settled =
+            settle(response).map_err(|e| OpdsError::Network(format!("read body: {e}")))?;
+        let content_type = settled.content_type().map(str::to_string);
 
-        if status == 401 {
+        if settled.status == 401 {
             let auth_doc = content_type
                 .as_deref()
                 .filter(|t| t.contains("opds-authentication"))
-                .and_then(|_| serde_json::from_slice::<AuthDocument>(&body).ok());
+                .and_then(|_| serde_json::from_slice::<AuthDocument>(&settled.body).ok());
             return Err(OpdsError::AuthRequired(auth_doc.map(Box::new)));
         }
-        if !(200..300).contains(&status) {
-            return Err(OpdsError::Http(status));
+        if !(200..300).contains(&settled.status) {
+            return Err(OpdsError::Http(settled.status));
         }
-        Ok((body, content_type))
+        Ok((settled.body, content_type))
     }
 }
 

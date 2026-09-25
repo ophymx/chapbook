@@ -72,13 +72,20 @@ one whose name does not start with `chapbook`. It is a working OPDS
 expected to leave this repository for its own eventually. It is also the
 only crate here whose *feature* surface is part of the promise: the
 `ureq` transport is a default feature, and a caller that turns it off and
-supplies its own `HttpClient` must keep working.
+supplies its own `HttpClient` must keep working. That trait's request and
+response are the `http` crate's types, and that is part of the promise
+too: it is what lets a host's one transport closure serve this crate and
+`chapbook-annotations` at once, and a shape of this crate's own would
+take that away.
 
 **`chapbook-annotations` is API** for the same reason
 `chapbook-library` is: a shell calls it directly to sync a reader's marks,
 and its `Mark` is built out of `chapbook_library::AnnotationKind` and
 `chapbook_core::LayeredLocator`, so its signatures are already made of
-another tier's types. Its wire format is not the promise, though — the
+another tier's types. Its container half is not: the model, the protocol
+and its own `HttpClient` over the `http` crate's types depend on nothing
+of chapbook's, which is the seam along which that half leaves for a crate
+of its own. Its wire format is not the promise, though — the
 Web Annotation Data Model is, and this crate follows it rather than
 versioning its own shape. What *is* promised is that a document it does
 not fully understand survives a round trip through it unchanged: a

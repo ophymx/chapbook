@@ -9,7 +9,9 @@ use std::collections::HashMap;
 use std::io::Cursor;
 use std::sync::{Arc, Mutex};
 
-use opds_client::http::{HttpClient, HttpError, HttpRequest, HttpResponse};
+use opds_client::http::{
+    header, Body, HeaderMap, HttpClient, HttpError, HttpRequest, HttpResponse, Response,
+};
 use opds_client::{OpdsClient, OpdsError};
 
 const HOST: &str = "https://cat.example.com";
@@ -35,7 +37,8 @@ const AUTH_DOC: &str = r#"{
 #[derive(Clone, Default)]
 struct FakeHttp(Arc<Canned>);
 
-/// Header name/value pairs, as `HttpRequest` carries them.
+/// Header name/value pairs, flattened out of the request's `HeaderMap` so
+/// a test can read them without the `http` crate's types in the way.
 type Headers = Vec<(String, String)>;
 /// What a route serves: status, content-type, body.
 type CannedResponse = (u16, String, Vec<u8>);
@@ -75,23 +78,26 @@ fn header_of(headers: &Headers, name: &str) -> Option<String> {
         .map(|(_, v)| v.clone())
 }
 
+fn headers_of(map: &HeaderMap) -> Headers {
+    map.iter()
+        .filter_map(|(name, value)| Some((name.to_string(), value.to_str().ok()?.to_string())))
+        .collect()
+}
+
 fn respond(status: u16, content_type: Option<&str>, body: Vec<u8>) -> HttpResponse {
-    HttpResponse {
-        status,
-        content_type: content_type.map(str::to_string),
-        headers: Vec::new(),
-        body: Box::new(Cursor::new(body)),
+    let mut response = Response::builder().status(status);
+    if let Some(content_type) = content_type {
+        response = response.header(header::CONTENT_TYPE, content_type);
     }
+    response.body(Box::new(Cursor::new(body)) as Body).unwrap()
 }
 
 impl HttpClient for FakeHttp {
-    fn get(&self, request: HttpRequest) -> Result<HttpResponse, HttpError> {
-        let authorized = header_of(&request.headers, "Authorization").is_some();
-        self.0
-            .seen
-            .lock()
-            .unwrap()
-            .push((request.url.clone(), request.headers.clone()));
+    fn send(&self, request: HttpRequest) -> Result<HttpResponse, HttpError> {
+        let url = request.uri().to_string();
+        let headers = headers_of(request.headers());
+        let authorized = header_of(&headers, "Authorization").is_some();
+        self.0.seen.lock().unwrap().push((url.clone(), headers));
 
         if *self.0.require_auth.lock().unwrap() && !authorized {
             return Ok(respond(
@@ -100,7 +106,7 @@ impl HttpClient for FakeHttp {
                 AUTH_DOC.as_bytes().to_vec(),
             ));
         }
-        let path = request.url.trim_start_matches(HOST);
+        let path = url.trim_start_matches(HOST);
         match self.0.routes.lock().unwrap().get(path) {
             Some((status, content_type, body)) => {
                 Ok(respond(*status, Some(content_type), body.clone()))

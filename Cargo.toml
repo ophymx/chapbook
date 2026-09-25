@@ -189,6 +189,11 @@ quick-xml = "0.42"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 url = "2"
+# The request and response types every transport-agnostic HTTP crate shares.
+# `opds-client` and `chapbook-annotations` both speak them, which is what
+# lets one closure over a host's networking serve both without either
+# crate naming the other.
+http = "1"
 
 # Library persistence
 rusqlite = { version = "0.40", features = ["bundled"] }

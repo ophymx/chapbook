@@ -187,7 +187,8 @@ fn a_loaded_unit_is_reported_with_its_spine() {
 #[cfg(all(feature = "opds", feature = "cbz"))]
 #[test]
 fn a_failed_unit_reaches_the_shell_instead_of_only_the_log() {
-    use chapbook_reader::{HttpClient, HttpError, HttpRequest, HttpResponse};
+    use chapbook_reader::chapbook_opds::http::{header, Response};
+    use chapbook_reader::{Body, HttpClient, HttpError, HttpRequest, HttpResponse};
     use std::io::Cursor;
     use std::sync::Arc;
 
@@ -197,8 +198,8 @@ fn a_failed_unit_reaches_the_shell_instead_of_only_the_log() {
     struct PagesRefused;
 
     impl HttpClient for PagesRefused {
-        fn get(&self, request: HttpRequest) -> Result<HttpResponse, HttpError> {
-            if request.url.contains("/pages") {
+        fn send(&self, request: HttpRequest) -> Result<HttpResponse, HttpError> {
+            if request.uri().path().contains("/pages") {
                 return Err(HttpError::new("the page shed is locked"));
             }
             let feed = format!(
@@ -212,12 +213,11 @@ fn a_failed_unit_reaches_the_shell_instead_of_only_the_log() {
   </entry>
 </feed>"#
             );
-            Ok(HttpResponse {
-                status: 200,
-                content_type: Some("application/atom+xml".into()),
-                headers: Vec::new(),
-                body: Box::new(Cursor::new(feed.into_bytes())),
-            })
+            Ok(Response::builder()
+                .status(200)
+                .header(header::CONTENT_TYPE, "application/atom+xml")
+                .body(Box::new(Cursor::new(feed.into_bytes())) as Body)
+                .expect("a well-formed canned response"))
         }
     }
 
