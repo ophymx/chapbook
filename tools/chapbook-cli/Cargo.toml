@@ -21,6 +21,10 @@ path = "src/main.rs"
 # that needs a device: `mezzotint/fbdev` is Linux-only, and a dev CLI on a
 # desktop has no framebuffer to open.
 fbdev = ["mezzotint/fbdev"]
+# The e-ink controller behind a Kobo colour panel's framebuffer. Implies
+# `fbdev` because mezzotint's `HwtconPanel` sits on its `FbdevPanel`; the
+# `show` example picks it when the framebuffer says it is that driver.
+hwtcon = ["fbdev", "mezzotint/hwtcon"]
 
 [dependencies]
 chapbook-core = { workspace = true }

@@ -2745,9 +2745,9 @@ dependencies = [
 
 [[package]]
 name = "mezzotint"
-version = "0.1.0"
+version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9a749807248be26d4d0aa6bb2b01e67daccfe1ad1545f9e48e1678aed4ec5a74"
+checksum = "90b74681b49e80f6673f65a7cab5e50fcd287f28bbc6e933f21e97ee17c88a91"
 dependencies = [
  "libc",
 ]
